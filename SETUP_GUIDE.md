@@ -121,7 +121,31 @@ sudo apt-mark hold kubelet kubeadm kubectl
 > sudah ada rilis lebih baru saat Anda membaca ini — cek di
 > https://kubernetes.io/releases/
 
-### 2.6 Inisialisasi cluster
+### 2.6 Install & konfigurasi crictl
+`scripts/collect_system_metrics.py` BERGANTUNG pada `crictl` untuk menemukan
+PID host dari container solver (lewat `crictl pods` lalu `crictl ps`/`crictl
+inspect`) — tanpa langkah ini, skrip tersebut akan gagal dengan
+"command not found".
+```bash
+CRICTL_VERSION="v1.31.1"   # samakan major.minor dengan versi Kubernetes di 2.5
+curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
+  -o /tmp/crictl.tar.gz
+sudo tar zxvf /tmp/crictl.tar.gz -C /usr/local/bin
+rm /tmp/crictl.tar.gz
+
+cat <<EOF | sudo tee /etc/crictl.yaml
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+debug: false
+EOF
+
+# Verifikasi crictl bisa bicara dengan containerd:
+sudo crictl version
+sudo crictl pods
+```
+
+### 2.7 Inisialisasi cluster
 ```bash
 sudo kubeadm init --pod-network-cidr=10.244.0.0/16
 
@@ -131,21 +155,30 @@ sudo cp -i /etc/kubernetes/admin.conf "$HOME/.kube/config"
 sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 ```
 
-### 2.7 Install CNI plugin (Flannel — sederhana, cukup untuk single-node)
+### 2.8 Install CNI plugin (Flannel — sederhana, cukup untuk single-node)
 ```bash
 kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 ```
 
-### 2.8 Hapus taint control-plane (supaya Pod bisa dijadwalkan di node ini)
+### 2.9 Hapus taint control-plane (supaya Pod bisa dijadwalkan di node ini)
 ```bash
 kubectl taint nodes --all node-role.kubernetes.io/control-plane-
 ```
 
-### 2.9 Verifikasi cluster siap
+### 2.10 Verifikasi cluster siap
 ```bash
 kubectl get nodes -o wide
 # Tunggu sampai STATUS = Ready (bisa 1-2 menit setelah Flannel terpasang)
 kubectl get pods -A
+```
+
+### 2.11 Berikan akses sudo tanpa password untuk crictl (dibutuhkan saat eksperimen berjalan)
+`run_experiment.sh` memanggil `collect_system_metrics.py` di background sambil
+menunggu Pod selesai — proses ini perlu menjalankan `sudo crictl` tanpa
+diinterupsi prompt password di tengah eksperimen otomatis.
+```bash
+echo "$USER ALL=(ALL) NOPASSWD: /usr/local/bin/crictl" | sudo tee /etc/sudoers.d/crictl-nopasswd
+sudo chmod 440 /etc/sudoers.d/crictl-nopasswd
 ```
 
 ---
@@ -235,14 +268,14 @@ terisi angka wajar (bukan `null`).
 ## Bagian 6 — Eksperimen penuh
 
 ```bash
-# Kondisi A (baseline)
-bash scripts/run_experiment.sh none 10 7
+# Kondisi A (baseline) — N=15 sesuai Metode Penelitian
+bash scripts/run_experiment.sh none 15 7
 
 # Berpindah ke Kondisi B (perlakuan) — ini akan men-drain node sementara
 bash scripts/switch_cpu_manager_policy.sh static
 
 # Kondisi B (perlakuan)
-bash scripts/run_experiment.sh static 10 7
+bash scripts/run_experiment.sh static 15 7
 
 # (Opsional) kembali ke none untuk pengujian lanjutan
 bash scripts/switch_cpu_manager_policy.sh none

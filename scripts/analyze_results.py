@@ -224,12 +224,15 @@ def run_effect_size_analysis(mw_results: dict, alpha_corrected: float):
     "Objek Uji" di Metode Penelitian — ukuran & struktur sparsity).
 
     Effect size dihitung sebagai rank-biserial correlation, diturunkan
-    langsung dari statistik U pada uji Mann-Whitney (Wendt, 1972):
-        r = 1 - (2 * U) / (n1 * n2)
+    langsung dari statistik U pada uji Mann-Whitney:
+        r = (2 * U) / (n1 * n2) - 1
     U di sini adalah U untuk grup 'none' (grup pertama yang dipassing ke
-    mannwhitneyu). r mendekati +1 berarti crossover time grup 'none' SECARA
-    KONSISTEN lebih tinggi daripada 'static' (CPU pinning sangat berpengaruh);
-    r mendekati 0 berarti hampir tidak ada beda sistematis antar kondisi.
+    mannwhitneyu — scipy mengembalikan U relatif terhadap argumen pertama).
+    r mendekati +1 berarti crossover time grup 'none' SECARA KONSISTEN lebih
+    tinggi daripada 'static' (CPU pinning sangat berpengaruh, ke arah yang
+    diharapkan); r mendekati 0 berarti hampir tidak ada beda sistematis;
+    r negatif berarti arah sebaliknya (static justru lebih lambat — patut
+    dicurigai sebagai anomali, periksa manual).
     """
     print("=" * 70)
     print("EFFECT SIZE (RANK-BISERIAL) ANTAR INSTANCE")
@@ -244,7 +247,7 @@ def run_effect_size_analysis(mw_results: dict, alpha_corrected: float):
     rows = []
     for instance, r in mw_results.items():
         n1, n2 = r["n_none"], r["n_static"]
-        rank_biserial = 1 - (2 * r["u_stat"]) / (n1 * n2)
+        rank_biserial = (2 * r["u_stat"]) / (n1 * n2) - 1
         significant = r["p_raw"] < alpha_corrected
         rows.append((instance, rank_biserial, r["pct_reduction"], r["p_raw"], significant))
 
