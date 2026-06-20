@@ -1,0 +1,22 @@
+# kubelet-config-condition-A-none.yaml
+# Kondisi A (baseline): CPU Manager policy = none (CFS default Linux).
+# File ini menggantikan /var/lib/kubelet/config.yaml di VM, lihat
+# scripts/switch_cpu_manager_policy.sh untuk prosedur penggantian yang aman.
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cpuManagerPolicy: none
+# Tetap mencadangkan resource untuk system daemon meskipun policy none,
+# supaya kondisi A dan B comparable dari sisi alokasi resource non-CPU-pinning.
+systemReserved:
+  cpu: "500m"
+  memory: "512Mi"
+kubeReserved:
+  cpu: "500m"
+  memory: "512Mi"
+enforceNodeAllocatable:
+  - pods
+  - system-reserved
+  - kube-reserved
+evictionHard:
+  memory.available: "300Mi"
+  nodefs.available: "10%"

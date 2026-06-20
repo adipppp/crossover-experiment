@@ -1,0 +1,72 @@
+# Template Pod untuk satu kali run solver.
+#
+# PENTING — syarat Guaranteed QoS (wajib untuk kebijakan CPU Manager `static`):
+#   1. requests.cpu HARUS SAMA dengan limits.cpu
+#   2. requests.memory HARUS SAMA dengan limits.memory
+#   3. Nilai CPU HARUS INTEGER (mis. "6", bukan "6.5" atau "6500m")
+# Pod ini akan dipakai untuk KEDUA kondisi (none dan static) — yang membedakan
+# hasil HANYA kebijakan cpuManagerPolicy di kubelet node, bukan manifest Pod.
+# Mengubah manifest Pod antar kondisi akan merusak validitas perbandingan.
+#
+# Placeholder yang diisi otomatis oleh scripts/run_experiment.sh sebelum
+# `kubectl apply`: __RUN_ID__, __CONDITION__, __INSTANCE_FILE__, __CPU_COUNT__
+apiVersion: v1
+kind: Pod
+metadata:
+  name: solver-__RUN_ID__
+  namespace: crossover-experiment
+  labels:
+    app: crossover-solver
+    condition: "__CONDITION__"
+    run-id: "__RUN_ID__"
+spec:
+  restartPolicy: Never
+  # Tidak ada nodeSelector/affinity karena ini cluster single-node;
+  # di cluster multi-node, WAJIB ditambahkan nodeName/nodeSelector
+  # agar Pod kedua kondisi konsisten berjalan di node yang identik.
+  containers:
+    - name: solver
+      image: crossover-experiment/gurobi-solver:latest
+      imagePullPolicy: IfNotPresent
+      command:
+        - python
+        - /app/run_solver.py
+        - --instance=/app/instances/__INSTANCE_FILE__
+        - --condition=__CONDITION__
+        - --run-id=__RUN_ID__
+        - --output-dir=/app/results
+        - --threads=__CPU_COUNT__
+      env:
+        - name: GRB_WLSACCESSID
+          valueFrom:
+            secretKeyRef:
+              name: gurobi-wls-credentials
+              key: GRB_WLSACCESSID
+        - name: GRB_WLSSECRET
+          valueFrom:
+            secretKeyRef:
+              name: gurobi-wls-credentials
+              key: GRB_WLSSECRET
+        - name: GRB_LICENSEID
+          valueFrom:
+            secretKeyRef:
+              name: gurobi-wls-credentials
+              key: GRB_LICENSEID
+      resources:
+        requests:
+          cpu: "__CPU_COUNT__"
+          memory: "4Gi"
+        limits:
+          cpu: "__CPU_COUNT__"
+          memory: "4Gi"
+      volumeMounts:
+        - name: experiment-data
+          mountPath: /app/instances
+          subPath: instances
+        - name: experiment-data
+          mountPath: /app/results
+          subPath: results
+  volumes:
+    - name: experiment-data
+      persistentVolumeClaim:
+        claimName: experiment-data-pvc

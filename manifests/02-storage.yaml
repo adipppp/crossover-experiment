@@ -1,0 +1,27 @@
+# Karena ini cluster single-node (kubeadm di satu VM), hostPath aman dipakai
+# untuk berbagi data antara host dan Pod tanpa kompleksitas storage class.
+# TIDAK disarankan untuk cluster multi-node produksi.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: experiment-data-pv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/experiment-data
+  persistentVolumeReclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: experiment-data-pvc
+  namespace: crossover-experiment
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi

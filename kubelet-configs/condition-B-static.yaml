@@ -1,0 +1,26 @@
+# kubelet-config-condition-B-static.yaml
+# Kondisi B (perlakuan): CPU Manager policy = static.
+# 1 vCPU dicadangkan (systemReserved + kubeReserved gabungan = 1 core penuh),
+# menyisakan 7 vCPU yang bisa dialokasikan eksklusif ke Pod Guaranteed.
+#
+# CATATAN: systemReserved dan kubeReserved di sini masing-masing 500m
+# (total 1 core) — KONSISTEN dengan Kondisi A supaya satu-satunya
+# perbedaan antar kondisi adalah cpuManagerPolicy itu sendiri, bukan
+# jumlah core yang dicadangkan untuk sistem.
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cpuManagerPolicy: static
+cpuManagerReconcilePeriod: 10s
+systemReserved:
+  cpu: "500m"
+  memory: "512Mi"
+kubeReserved:
+  cpu: "500m"
+  memory: "512Mi"
+enforceNodeAllocatable:
+  - pods
+  - system-reserved
+  - kube-reserved
+evictionHard:
+  memory.available: "300Mi"
+  nodefs.available: "10%"
