@@ -320,3 +320,14 @@ python3 scripts/analyze_results.py --results-dir /mnt/experiment-data/results
   ```
 - **Jangan commit** Secret/kredensial WLS ke git, termasuk file `.bash_history`
   atau screenshot terminal yang menampilkannya.
+
+## Troubleshooting & Recovery
+
+### Kubelet Crash / "1 node(s) were unschedulable"
+Jika skrip `switch_cpu_manager_policy.sh` gagal di tengah jalan (karena interupsi paksa atau kesalahan konfigurasi cadangan), Node eksperimen (VM) akan tertinggal dalam status terkunci (`SchedulingDisabled` / Cordoned) dan layanan `kubelet` berpotensi mati. 
+
+Untuk memulihkan klaster ke kondisi siap eksperimen, lakukan langkah berikut secara berurutan:
+
+1. **Timpa konfigurasi Node yang rusak** dengan konfigurasi bersih:
+   ```bash
+   sudo cp ~/crossover-experiment/kubelet-configs/condition-A-none.yaml /var/lib/kubelet/config.yaml
