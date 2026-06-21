@@ -37,11 +37,11 @@ mkdir -p "$RESULTS_DIR"
 # Subbab "Objek Uji" di Metode Penelitian — daftar di bawah CONTOH STRUKTUR,
 # isi nama file sesuai instance yang benar-benar Anda pilih dan unduh.
 INSTANCES=(
-  "neos3.mps.gz"
-  "L1_sixm1000obs.mps.gz"
-  "Linf_520c.mps.gz"
-  "GANTI_instance_keempat.mps.gz"
-  "GANTI_instance_kelima.mps.gz"
+  "neos3.mps"
+  "L1_sixm1000obs.mps"
+  "Linf_520c.mps"
+  "cont1.mps"
+  "cont11.mps"
 )
 
 echo "================================================================"

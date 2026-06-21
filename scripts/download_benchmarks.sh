@@ -29,8 +29,8 @@ declare -A INSTANCE_URLS=(
   ["neos3.mps.gz"]="https://example-placeholder.invalid/neos3.mps.gz"
   ["L1_sixm1000obs.mps.gz"]="https://example-placeholder.invalid/L1_sixm1000obs.mps.gz"
   ["Linf_520c.mps.gz"]="https://example-placeholder.invalid/Linf_520c.mps.gz"
-  ["GANTI_instance_keempat.mps.gz"]="https://example-placeholder.invalid/GANTI_instance_keempat.mps.gz"
-  ["GANTI_instance_kelima.mps.gz"]="https://example-placeholder.invalid/GANTI_instance_kelima.mps.gz"
+  ["cont1.mps.gz"]="https://example-placeholder.invalid/cont1.mps.gz"
+  ["cont11.mps.gz"]="https://example-placeholder.invalid/cont11.mps.gz"
 )
 
 for filename in "${!INSTANCE_URLS[@]}"; do
