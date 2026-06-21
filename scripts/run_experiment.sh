@@ -60,9 +60,14 @@ fi
 
 for instance in "${INSTANCES[@]}"; do
   instance_basename="${instance%%.*}"
+  
+  # --- TAMBAHAN ---
+  # Sanitize basename untuk nama K8s: ubah huruf ke lowercase dan ganti '_' menjadi '-'
+  sanitized_basename=$(echo "$instance_basename" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
   for rep in $(seq -w 1 "$N_REPS"); do
-    run_id="${CONDITION}-${instance_basename}-run${rep}"
+    # Gunakan sanitized_basename di run_id agar Pod memenuhi standar RFC 1123
+    run_id="${CONDITION}-${sanitized_basename}-run${rep}"
     pod_name="solver-${run_id}"
 
     echo ""
