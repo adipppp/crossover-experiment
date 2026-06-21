@@ -121,11 +121,27 @@ for instance in "${INSTANCES[@]}"; do
     METRICS_PID=$!
 
     echo ">>> Menunggu Pod selesai (solve berjalan)..."
-    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod_name" -n "$NAMESPACE" --timeout=1800s || {
-      echo "PERINGATAN: Pod $pod_name tidak Succeeded dalam batas waktu. Cek manual:" >&2
-      echo "  kubectl describe pod $pod_name -n $NAMESPACE" >&2
-      echo "  kubectl logs $pod_name -n $NAMESPACE" >&2
-    }
+    TIMEOUT=1800
+    ELAPSED=0
+    while true; do
+        PHASE=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        
+        if [[ "$PHASE" == "Succeeded" ]]; then
+            break
+        elif [[ "$PHASE" == "Failed" ]]; then
+            echo "FATAL: Pod $pod_name berstatus Failed (kemungkinan OOMKilled)." >&2
+            echo ">>> Menunggu 300 detik agar server Gurobi WLS menghapus token (default 5 menit)..." >&2
+            sleep 300
+            break
+        fi
+        
+        if (( ELAPSED >= TIMEOUT )); then
+            echo "PERINGATAN: Timeout 1800s tercapai untuk $pod_name." >&2
+            break
+        fi
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+    done
 
     # Tunggu proses monitoring background ikut selesai (PID sudah exit di dalamnya).
     wait "$METRICS_PID" || echo "PERINGATAN: collect_system_metrics.py keluar dengan error untuk $run_id"
@@ -137,6 +153,11 @@ for instance in "${INSTANCES[@]}"; do
     kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=true --timeout=60s
 
     rm -f "$rendered_manifest"
+
+    # --- TAMBAHAN FIX LISENSI ---
+    echo ">>> Menunggu 10 detik agar server Gurobi WLS merilis token lisensi..."
+    sleep 10
+    # ----------------------------
 
     echo ">>> RUN $run_id selesai."
   done

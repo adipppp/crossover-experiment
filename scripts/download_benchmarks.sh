@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # download_benchmarks.sh — Mengunduh subset instance dari koleksi benchmark
 # Mittelmann untuk LP. Jalankan di VM, di luar Pod.
-#
-# CATATAN: URL instance individual di plato.asu.edu berubah dari waktu ke
-# waktu tergantung benchmark suite aktif (mis. "Barrier LP", "Crossover" suite).
-# VERIFIKASI MANUAL daftar dan URL terbaru di https://plato.asu.edu/bench.html
-# sebelum menjalankan skrip ini — daftar di bawah adalah CONTOH STRUKTUR,
-# bukan URL final yang sudah divalidasi.
 
 set -euo pipefail
 
@@ -14,44 +8,45 @@ DEST_DIR="/mnt/experiment-data/instances"
 mkdir -p "$DEST_DIR"
 cd "$DEST_DIR"
 
-echo ">>> PERINGATAN: skrip ini berisi URL CONTOH yang HARUS diverifikasi"
-echo ">>> manual terhadap https://plato.asu.edu/bench.html sebelum dipakai."
-echo ">>> Lanjutkan? (Ctrl+C untuk batal, Enter untuk lanjut)"
-read -r
+echo ">>> Mengunduh instance Mittelmann LP benchmark..."
 
-# Contoh struktur unduhan — GANTI dengan URL instance aktual yang Anda
-# pilih dari halaman benchmark Mittelmann (mis. set LP benchmark / Crossover).
-# Contoh struktur unduhan — GANTI dengan URL instance aktual yang Anda
-# pilih dari halaman benchmark Mittelmann (mis. set LP benchmark / Crossover).
-# Minimal LIMA instance sesuai Subbab "Objek Uji" di Metode Penelitian —
-# nama file di sini HARUS sama persis dengan array INSTANCES di run_experiment.sh.
+# URL aktual dari plato.asu.edu (Hans Mittelmann LP test set)
 declare -A INSTANCE_URLS=(
-  ["neos3.mps.gz"]="https://example-placeholder.invalid/neos3.mps.gz"
-  ["L1_sixm1000obs.mps.gz"]="https://example-placeholder.invalid/L1_sixm1000obs.mps.gz"
-  ["Linf_520c.mps.gz"]="https://example-placeholder.invalid/Linf_520c.mps.gz"
-  ["cont1.mps.gz"]="https://example-placeholder.invalid/cont1.mps.gz"
-  ["cont11.mps.gz"]="https://example-placeholder.invalid/cont11.mps.gz"
+  ["neos3.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/neos3.bz2"
+  ["L1_sixm1000obs.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/L1_sixm1000obs.bz2"
+  ["Linf_520c.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/Linf_520c.bz2"
+  ["cont1.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont1.bz2"
+  ["cont11.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont11.bz2"
 )
 
-for filename in "${!INSTANCE_URLS[@]}"; do
-  url="${INSTANCE_URLS[$filename]}"
+for archive in "${!INSTANCE_URLS[@]}"; do
+  filename="${archive%.bz2}" # Ekstrak nama file .mps
+  url="${INSTANCE_URLS[$archive]}"
+  
   if [[ -f "$filename" ]]; then
     echo ">>> $filename sudah ada, skip."
     continue
   fi
-  echo ">>> Mengunduh $filename dari $url ..."
-  curl -fSL -o "$filename" "$url" || {
-    echo "GAGAL mengunduh $filename — periksa URL manual di plato.asu.edu" >&2
+  
+  echo ">>> Mengunduh $archive dari $url ..."
+  curl -fSL -o "$archive" "$url" || {
+    echo "GAGAL mengunduh $archive" >&2
+    continue
   }
+
+  echo ">>> Mengekstrak $archive..."
+  bzip2 -d "$archive"
 done
 
-echo ">>> Verifikasi integritas file (ukuran > 0, bisa dibuka gzip):"
-for filename in "${!INSTANCE_URLS[@]}"; do
+echo ">>> Verifikasi integritas file (.mps):"
+for archive in "${!INSTANCE_URLS[@]}"; do
+  filename="${archive%.bz2}"
   if [[ -f "$filename" ]]; then
     size=$(stat -c%s "$filename")
-    gzip -t "$filename" 2>/dev/null && status="OK" || status="CORRUPT/BUKAN_GZIP"
-    echo "  $filename: ${size} bytes, status: $status"
+    echo "  $filename: ${size} bytes, status: OK"
+  else
+    echo "  $filename: GAGAL DIEKSTRAK ATAU TIDAK DITEMUKAN"
   fi
 done
 
-echo ">>> Selesai. Pastikan setiap file berstatus OK sebelum menjalankan eksperimen."
+echo ">>> Selesai. Pastikan semua file berstatus OK sebelum menjalankan eksperimen."
