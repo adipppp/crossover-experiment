@@ -192,6 +192,24 @@ sudo usermod -aG docker "$USER"
 newgrp docker   # refresh group membership tanpa perlu re-login
 ```
 
+> ⚠️ **Troubleshooting: dpkg error setelah install Docker**
+>
+> Jika muncul `E: Sub-process /usr/bin/dpkg returned an error code (1)` saat
+> menjalankan baris pertama, kemungkinan besar **config file conflict** antara
+> `containerd` (Ubuntu repo, Section 2.3) dan `containerd.io` (Docker repo).
+> Config `/etc/containerd/config.toml` yang sudah Anda edit di Section 2.3
+> memicu prompt dpkg yang gagal karena non-interactive.
+>
+> **Fix:**
+> ```bash
+> DEBIAN_FRONTEND=noninteractive dpkg --configure --force-confdef --force-confold -a
+> ```
+> Ini memaksa dpkg mempertahankan config Anda dan menyelesaikan semua
+> package pending. Setelah itu, verifikasi:
+> ```bash
+> docker run hello-world
+> ```
+
 ### 3.2 Transfer file proyek dari laptop Anda ke VM
 Di **laptop** (bukan di VM), jalankan:
 ```bash
