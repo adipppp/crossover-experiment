@@ -2,16 +2,6 @@
 # switch_cpu_manager_policy.sh — Mengganti kebijakan CPU Manager kubelet dengan
 # AMAN, mengikuti prosedur resmi: drain node -> stop kubelet -> hapus state
 # file lama -> ganti config -> start kubelet -> uncordon.
-#
-# PERINGATAN: skrip ini akan mengevict SEMENTARA semua Pod di node (karena
-# cluster ini single-node, berarti seluruh workload eksperimen Anda berhenti
-# sesaat). Pada cluster single-node tanpa node lain, drain hanya akan berhasil
-# jika tidak ada DaemonSet/Pod tanpa toleransi eviction yang menghalangi;
-# gunakan --ignore-daemonsets sesuai contoh di bawah.
-#
-# Penggunaan:
-#   ./switch_cpu_manager_policy.sh none      # pindah ke Kondisi A
-#   ./switch_cpu_manager_policy.sh static    # pindah ke Kondisi B
 
 set -euo pipefail
 
@@ -46,8 +36,8 @@ echo ">>> [2/6] Menghentikan kubelet..."
 sudo systemctl stop kubelet
 
 echo ">>> [3/6] Menghapus state file CPU Manager lama (wajib saat ganti policy)..."
-if [[ -f "$STATE_FILE" ]]; then
-  sudo cp "$STATE_FILE" "${STATE_FILE}.bak.$(date +%s)"  # backup untuk audit, bukan untuk dipulihkan
+if sudo test -f "$STATE_FILE"; then
+  sudo cp "$STATE_FILE" "${STATE_FILE}.bak.$(date +%s)"
   sudo rm -f "$STATE_FILE"
 else
   echo "    (tidak ada state file sebelumnya, lanjut)"
@@ -71,8 +61,8 @@ echo ">>> [6/6] Uncordon node..."
 kubectl uncordon "$NODE_NAME"
 
 echo ">>> Verifikasi kebijakan aktif:"
-if [[ -f "$STATE_FILE" ]]; then
-  cat "$STATE_FILE"
+if sudo test -f "$STATE_FILE"; then
+  sudo cat "$STATE_FILE"
 else
   echo "    (state file belum dibuat — normal jika belum ada Pod Guaranteed yang dijadwalkan)"
 fi

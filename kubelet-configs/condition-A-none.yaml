@@ -48,3 +48,9 @@ staticPodPath: /etc/kubernetes/manifests
 streamingConnectionIdleTimeout: 0s
 syncFrequency: 0s
 volumeStatsAggPeriod: 0s
+systemReserved:
+  cpu: "500m"
+  memory: "512Mi"
+kubeReserved:
+  cpu: "500m"
+  memory: "512Mi"

@@ -125,16 +125,16 @@ for instance in "${INSTANCES[@]}"; do
     ELAPSED=0
     while true; do
         PHASE=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-        
+
         if [[ "$PHASE" == "Succeeded" ]]; then
             break
-        elif [[ "$PHASE" == "Failed" ]]; then
+    	elif [[ "$PHASE" == "Failed" ]]; then
             echo "FATAL: Pod $pod_name berstatus Failed (kemungkinan OOMKilled)." >&2
             echo ">>> Menunggu 300 detik agar server Gurobi WLS menghapus token (default 5 menit)..." >&2
             sleep 300
             break
         fi
-        
+
         if (( ELAPSED >= TIMEOUT )); then
             echo "PERINGATAN: Timeout 1800s tercapai untuk $pod_name." >&2
             break
