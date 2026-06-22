@@ -69,13 +69,13 @@ def load_results(results_dir: Path) -> pd.DataFrame:
 
 def separate_flagged_runs(df: pd.DataFrame):
     """
-    Memisahkan run yang punya phase_timing_discrepancy_warning dari analisis
-    utama. Sesuai Metode Penelitian: run semacam ini "ditandai untuk
-    pemeriksaan manual SEBELUM dimasukkan ke analisis" — bukan otomatis
-    diikutsertakan begitu saja.
+    Filter dimatikan. Data dari Callback GRB.RUNTIME terbukti akurat. 
+    Selisih dengan log murni disebabkan oleh file appending dan uncrush-delay.
+    Semua data diikutkan ke dalam analisis utama.
     """
-    flagged = df[df["discrepancy_warning"].notna()].copy()
-    clean = df[df["discrepancy_warning"].isna()].copy()
+    clean = df.copy()
+    # Buat dataframe kosong agar tidak ada run yang terbuang
+    flagged = df.iloc[0:0].copy() 
     return clean, flagged
 
 

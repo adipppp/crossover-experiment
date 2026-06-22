@@ -6,123 +6,52 @@ untuk langkah eksekusi lengkap dari nol (gcloud → kubeadm → eksperimen).
 
 ## Struktur Proyek
 
+
 ```
+
 crossover-experiment/
 ├── SETUP_GUIDE.md              # Panduan step-by-step gcloud + kubeadm (BACA INI DULU)
 ├── Dockerfile                  # Image solver berbasis gurobi/python
 ├── manifests/
 │   ├── 00-namespace.yaml       # Namespace terisolasi untuk eksperimen
-│   ├── 01-secret-template.yaml # Template struktur Secret (JANGAN diisi & apply langsung)
+│   ├── 01-secret-template.yaml # Template struktur Secret
 │   ├── 02-storage.yaml         # PV/PVC hostPath untuk instance & hasil
 │   └── pod-template.yaml       # Template Pod, di-render scripts/run_experiment.sh
 ├── kubelet-configs/
 │   ├── condition-A-none.yaml   # Config kubelet Kondisi A (baseline CFS)
 │   └── condition-B-static.yaml # Config kubelet Kondisi B (CPU Manager static)
 └── scripts/
-    ├── run_solver.py                  # Dijalankan DI DALAM Pod: solve + catat timing
-    ├── collect_system_metrics.py      # Dijalankan DI HOST: pantau context-switch & throttling
-    ├── switch_cpu_manager_policy.sh   # Drain -> stop kubelet -> ganti config -> start -> uncordon
-    ├── run_experiment.sh              # Orkestrasi N repetisi x M instance, SEQUENTIAL
-    ├── download_benchmarks.sh         # Unduh instance Mittelmann (URL perlu diisi manual)
-    └── analyze_results.py             # Mann-Whitney+Bonferroni, korelasi per-kondisi, effect size RQ4
+├── run_solver.py                  # Dijalankan DI DALAM Pod: solve + catat timing
+├── collect_system_metrics.py      # Dijalankan DI HOST: pantau context-switch & throttling
+├── switch_cpu_manager_policy.sh   # Drain -> stop kubelet -> ganti config -> start -> uncordon
+├── run_experiment.sh              # Orkestrasi N repetisi x M instance (Idempoten)
+├── download_benchmarks.sh         # Unduh arsip Mittelmann valid (.bz2 ke .mps)
+└── analyze_results.py             # Uji Mann-Whitney, Bonferroni, Spearman korelasi
+
 ```
 
 ## Keputusan Desain Kunci (dan Alasannya)
 
-1. **Sequential, bukan paralel** — lisensi Gurobi WLS akademik dibatasi 2 sesi
-   konkuren. `run_experiment.sh` menjalankan satu Pod solver pada satu waktu,
-   menunggu selesai sepenuhnya (`Succeeded` + log + metrik diambil) sebelum
-   memulai run berikutnya. Checkout lisensi WLS juga di-retry otomatis
-   (backoff linear, 3 percobaan) di `run_solver.py` untuk menahan kegagalan
-   transient jaringan ke server lisensi pada ratusan run sekuensial.
+1. **Sequential, bukan paralel** — Lisensi Gurobi WLS akademik dibatasi 2 sesi konkuren. `run_experiment.sh` didesain untuk berjalan sekuensial. Skrip memiliki perlindungan *cooldown*: jika proses sebelumnya berjalan normal, jeda 10 detik diberikan. Namun jika Pod mengalami kegagalan (seperti `OOMKilled`), skrip memberikan jeda 300 detik (5 menit) untuk mematuhi durasi *token lifespan* WLS Gurobi guna menghindari *error* kelebihan sesi.
 
-2. **Pemisahan fase barrier/crossover via callback Gurobi, bukan parsing log
-   teks** — log Gurobi membulatkan timestamp ke detik (`Xs`), terlalu kasar
-   untuk crossover yang bisa berlangsung sub-detik. `run_solver.py` memakai
-   `GRB.Callback.RUNTIME` di callback `BARRIER` dan `SIMPLEX` untuk presisi
-   tinggi. **`Method=2` diset eksplisit** agar barrier dipakai murni (bukan
-   concurrent), supaya asumsi "callback SIMPLEX pertama = awal crossover"
-   tetap valid. Parsing log teks tetap dijalankan sebagai cross-check sekunder
-   saja — run dengan selisih besar antar kedua sumber ditandai
-   `phase_timing_discrepancy_warning` dan **dikeluarkan otomatis** dari
-   statistik utama oleh `analyze_results.py` sampai diperiksa manual.
+2. **Standardisasi Nama Pod (RFC 1123)** — Berbagai *instance* dari Mittlemann menggunakan huruf besar dan *underscore* (mis. `L1_sixm1000obs.mps`). Skrip orkestrasi memiliki *sanitizer* yang mengubah nama tersebut menjadi *lowercase* dan *hyphen* untuk injeksi ke dalam *manifest* Kubernetes agar pod tidak ditolak saat dijadwalkan, tanpa mengubah format file asli di penyimpanan.
 
-3. **Context-switch diukur khusus pada rentang fase crossover, bukan seluruh
-   siklus hidup proses** — `run_solver.py` mencatat `optimize_start_epoch_unix`
-   (wall-clock) plus batas waktu fase crossover dari callback Gurobi.
-   `collect_system_metrics.py` melakukan sampling kontinu (default tiap 50ms)
-   terhadap `involuntary_ctxt_switches`, lalu memotong delta-nya tepat pada
-   rentang fase crossover saja (`involuntary_ctxt_switches_delta_crossover_only`).
-   Tanpa ini, delta context-switch akan didominasi aktivitas fase barrier
-   (jauh lebih banyak iterasi), mengaburkan korelasi yang ingin diuji pada
-   Rumusan Masalah poin 2. Field versi whole-process tetap disimpan untuk
-   transparansi/audit, tapi tidak dipakai pada uji statistik.
+3. **Pemisahan fase barrier/crossover via callback Gurobi** — `run_solver.py` memakai `GRB.Callback.RUNTIME` pada *callback* `BARRIER` dan `SIMPLEX` untuk presisi waktu tinggi. **`Method=2`** diset eksplisit agar Gurobi menggunakan *barrier* murni, sehingga transisi ke *simplex* (crossover) menjadi jelas.
 
-4. **Resource Pod identik di kedua kondisi** — `pod-template.yaml` sama
-   persis untuk Kondisi A dan B; satu-satunya pembeda adalah `cpuManagerPolicy`
-   di level kubelet node. Ini krusial agar perbandingan valid (lihat
-   `run_experiment.sh`, ada validasi otomatis yang akan GAGAL jika Anda lupa
-   `switch_cpu_manager_policy.sh` sebelum menjalankan kondisi yang salah).
+4. **Kapasitas vs Alokasi Eksperimen (6 vCPU)** — Eksperimen dilakukan pada VM berkapasitas 8 vCPU. Untuk menghindari kondisi *Insufficient CPU* dan menjaga Kubelet tetap hidup, **2 vCPU** direstorasi khusus untuk sistem (`kubeReserved`, `systemReserved`, dan toleransi *DaemonSet* K8s). Skrip karenanya dieksekusi dengan parameter eksklusif **6 vCPU** untuk Gurobi *solver*.
 
-5. **Drain-stop-hapus state-ganti config-start-uncordon saat berganti
-   kebijakan** — bukan sekadar edit file lalu restart. Tanpa menghapus
-   `/var/lib/kubelet/cpu_manager_state`, kubelet bisa mempertahankan state
-   alokasi CPU dari kebijakan sebelumnya dan menyebabkan hasil tidak valid.
+5. **Drain-stop-hapus state-ganti config-start-uncordon** — Bukan sekadar mengedit file lalu *restart*. Tanpa menghapus `/var/lib/kubelet/cpu_manager_state`, kubelet bisa mempertahankan alokasi core dari sebelumnya, atau justru merusak inisialisasi jika reservasi `systemReserved` berubah.
 
-6. **Metrik sistem dikumpulkan dari HOST, bukan dari dalam container** —
-   `collect_system_metrics.py` butuh akses ke `/proc/<pid>/status` milik
-   proses container dan ke path cgroup v2 node, yang TIDAK terlihat dari
-   dalam Pod tanpa privileged access. Dijalankan sebagai proses terpisah di
-   VM, dikoordinasikan oleh `run_experiment.sh`. Pencarian PID container
-   dilakukan dua langkah via `crictl` (`crictl pods --name` untuk sandbox ID,
-   baru `crictl ps --pod <sandbox_id>` untuk container) — `crictl ps --pod`
-   mengharapkan sandbox ID, BUKAN nama Pod Kubernetes secara langsung.
-
-7. **Statistik mengikuti persis Subbab "Analisis Data" di Metode
-   Penelitian** — `analyze_results.py` menerapkan koreksi Bonferroni pada uji
-   Mann-Whitney U (RQ1, karena diuji terpisah per instance), menghitung
-   korelasi Spearman **terpisah per kondisi** (RQ2, menghindari confound
-   Simpson's paradox dari penggabungan lintas kondisi), menguji stabilitas
-   fase barrier (RQ3), dan menghitung effect size rank-biserial antar
-   instance (RQ4) — bukan hanya melaporkan signifikan/tidak signifikan.
-
-8. **Robustness sesi Gurobi** — `model.optimize()` di `run_solver.py`
-   dibungkus `try/except/finally`: kegagalan di tengah solve tetap menulis
-   JSON kegagalan minimal (supaya run tercatat, bukan menghilang), Pod tetap
-   exit dengan kode non-zero (supaya `kubectl wait` mendeteksinya sebagai
-   `Failed`, bukan diam-diam `Succeeded`), dan `dispose()` SELALU terpanggil
-   supaya sesi lisensi WLS tidak menggantung dan menghalangi run berikutnya.
+6. **Statistik mengikuti Metode Penelitian** — `analyze_results.py` mengaplikasikan koreksi Bonferroni untuk uji Mann-Whitney U, menghitung korelasi Spearman secara terpisah pada tiap Kondisi (menghindari efek *Simpson's Paradox*), dan memvalidasi independensi *noise* fase barrier.
 
 ## Keterbatasan yang Diwarisi dari Diskusi Metode
 
-- vCPU Compute Engine = 1 hyperthread, bukan 1 physical core penuh (lihat
-  bagian "Keterbatasan Metodologis" di proposal).
-- VM tetap berbagi physical host dengan tenant GCP lain di luar kendali
-  eksperimen — mitigasi: repetisi (N=15) + pelaporan median/IQR (sudah
-  diimplementasi di `analyze_results.py`), bukan rata-rata tunggal.
-- Resolusi penyelarasan context-switch ke fase crossover dibatasi oleh
-  interval polling `collect_system_metrics.py` (default 50ms) — untuk
-  instance dengan crossover yang jauh lebih singkat dari itu, delta yang
-  terhitung tetap merupakan APROKSIMASI, bukan nilai eksak.
-- Involuntary context switches tetap PROKSI untuk migrasi thread, bukan
-  pengukuran langsung perpindahan antar-core (lihat Batasan Masalah poin 5
-  di proposal) — context switch bisa terjadi tanpa migrasi (dilanjutkan di
-  core yang sama).
-- `download_benchmarks.sh` SENGAJA tidak diisi URL instance asli — Anda harus
-  memverifikasi & memilih instance dari https://plato.asu.edu/bench.html
-  secara manual, karena URL individual berubah tergantung suite benchmark
-  aktif dan saya tidak ingin menebak/mengarang URL yang mungkin sudah usang.
+- vCPU Compute Engine = 1 hyperthread, bukan 1 physical core penuh.
+- Meskipun node bersifat *single-tenant*, VM tetap berbagi *physical host* dengan VM penyewa GCP lain, sehingga mitigasi berupa pelaporan **median dan IQR** pada repetisi diterapkan.
+- *Involuntary context switches* berperan sebagai proksi kuantitatif, bukan metrik absolut lokasi sirkuit *core*.
 
-## Yang Masih Perlu Anda Lakukan Manual
+## Yang Perlu Anda Lakukan Manual
 
-- [ ] Generate Academic WLS license di Gurobi User Portal
-- [ ] Pilih & verifikasi **minimal 5 instance** benchmark dari plato.asu.edu
-      (variasi ukuran & struktur sparsity, lihat Subbab "Objek Uji" di
-      proposal), isi ke `scripts/download_benchmarks.sh` DAN samakan nama
-      filenya di array `INSTANCES` pada `scripts/run_experiment.sh`
-- [ ] Request kenaikan kuota CPU GCP jika region pilihan Anda quotanya < 8
-- [ ] Pastikan `crictl` terinstal & terkonfigurasi (`SETUP_GUIDE.md` 2.6)
-      sebelum menjalankan `run_experiment.sh` — tanpa ini,
-      `collect_system_metrics.py` akan gagal
-- [ ] Jalankan smoke test (1 repetisi) sebelum batch penuh N=15 — lihat
-      `SETUP_GUIDE.md` Bagian 5
+- [ ] Generate Academic WLS license di Gurobi User Portal.
+- [ ] Ubah nama/konfirmasi *instance* LP pada `download_benchmarks.sh`.
+- [ ] Pastikan Node berada di Kondisi A (`none`) sebelum menjalankan *baseline*.
