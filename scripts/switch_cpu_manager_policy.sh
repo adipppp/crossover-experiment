@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_SRC="$SCRIPT_DIR/../kubelet-configs/condition-$([ "$POLICY" == "none" ] && echo "A-none" || echo "B-static").yaml"
 KUBELET_CONFIG_DEST="/var/lib/kubelet/config.yaml"
 STATE_FILE="/var/lib/kubelet/cpu_manager_state"
-NODE_NAME="$(hostname)"
+NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || hostname | tr '[:upper:]' '[:lower:]')"
 
 echo ">>> Berpindah ke kebijakan CPU Manager: $POLICY"
 echo ">>> Sumber config: $CONFIG_SRC"

@@ -9,14 +9,14 @@
 # Penggunaan:
 #   ./run_experiment.sh <none|static> <jumlah_repetisi> <cpu_count>
 # Contoh (N=15 sesuai Metode Penelitian — lihat justifikasi jumlah repetisi di sana):
-#   ./run_experiment.sh none 15 7
-#   ./run_experiment.sh static 15 7
+#   ./run_experiment.sh none 15 3
+#   ./run_experiment.sh static 15 3
 
 set -euo pipefail
 
 CONDITION="${1:-}"
 N_REPS="${2:-15}"
-CPU_COUNT="${3:-6}"
+CPU_COUNT="${3:-3}"
 
 if [[ "$CONDITION" != "none" && "$CONDITION" != "static" ]]; then
   echo "Penggunaan: $0 <none|static> <jumlah_repetisi> <cpu_count>" >&2
@@ -57,6 +57,23 @@ if [[ "$ACTUAL_POLICY" != "$CONDITION" ]]; then
   echo "       Jalankan dulu: ./switch_cpu_manager_policy.sh $CONDITION" >&2
   exit 1
 fi
+
+# Verifikasi dukungan perf stat untuk hardware counters (PMU Virtualization)
+echo ">>> Memverifikasi dukungan hardware performance counters di host..."
+if command -v perf >/dev/null 2>&1 || which perf >/dev/null 2>&1; then
+  if sudo perf stat -e cache-misses sleep 0.1 2>&1 | grep -q "<not supported>"; then
+    echo "⚠️ PERINGATAN: Hardware performance counters tidak didukung/di-expose oleh hypervisor VM ini."
+    echo "   Pengumpulan data cache-misses/L1-dcache di sysmetrics akan kosong."
+    echo "   (Metrik utama context switch tetap dapat berjalan via procfs)."
+  else
+    echo ">>> [OK] Hardware performance counters didukung oleh host."
+  fi
+else
+  echo "⚠️ PERINGATAN: 'perf' tidak terinstall di host. Pemasangan 'linux-tools-common' diperlukan untuk metrik hardware."
+fi
+echo ""
+
+CONSECUTIVE_FAILURES=0
 
 for instance in "${INSTANCES[@]}"; do
   instance_basename="${instance%%.*}"
@@ -153,10 +170,21 @@ for instance in "${INSTANCES[@]}"; do
 
     # Ambil hasil JSON dari tmpfs Pod menggunakan kubectl cp sebelum Pod dihapus
     echo ">>> Mengambil file hasil JSON dari tmpfs Pod..."
+    RUN_SUCCESS=false
     if kubectl cp "$NAMESPACE/$pod_name:/app/results/${run_id}.json" "$RESULTS_DIR/${run_id}.json" 2> "$RESULTS_DIR/${run_id}.cp_err.log"; then
       touch "$RESULTS_DIR/${run_id}.cp_done"
+      RUN_SUCCESS=true
     else
-      echo "PERINGATAN: Gagal menyalin file hasil JSON dari Pod ${pod_name}." >&2
+      echo "PERINGATAN: Gagal menyalin file hasil JSON menggunakan kubectl cp. Mencoba metode fallback (kubectl exec -- cat)..." >&2
+      if kubectl exec "$pod_name" -n "$NAMESPACE" -- cat "/app/results/${run_id}.json" > "$RESULTS_DIR/${run_id}.json" 2> "$RESULTS_DIR/${run_id}.cat_err.log"; then
+        echo ">>> [OK] Berhasil menyalin file hasil JSON menggunakan metode fallback."
+        touch "$RESULTS_DIR/${run_id}.cp_done"
+        rm -f "$RESULTS_DIR/${run_id}.cp_err.log"
+        rm -f "$RESULTS_DIR/${run_id}.cat_err.log"
+        RUN_SUCCESS=true
+      else
+        echo "PERINGATAN: Metode fallback juga gagal. File hasil JSON tidak ditemukan atau rusak." >&2
+      fi
     fi
 
     # Tunggu proses monitoring background ikut selesai (PID sudah exit di dalamnya).
@@ -178,6 +206,19 @@ for instance in "${INSTANCES[@]}"; do
     sync
     echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
     sleep 2
+
+    # Hentikan jika kegagalan beruntun terjadi secara sistematis
+    if [[ "$RUN_SUCCESS" == "true" ]]; then
+      CONSECUTIVE_FAILURES=0
+    else
+      CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+      echo "⚠️ Terdeteksi kegagalan run. Jumlah kegagalan beruntun: ${CONSECUTIVE_FAILURES}/3"
+      if (( CONSECUTIVE_FAILURES >= 3 )); then
+        echo "FATAL: Terjadi kegagalan eksperimen secara berturut-turut sebanyak 3 kali." >&2
+        echo "       Menghentikan seluruh orkestrasi untuk menghemat lisensi dan waktu." >&2
+        exit 1
+      fi
+    fi
 
     # --- TAMBAHAN FIX LISENSI ---
     echo ">>> Menunggu 10 detik agar server Gurobi WLS merilis token lisensi..."
