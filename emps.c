@@ -662,11 +662,11 @@ badchk(char *buf)
 	lastl = buf;
 	if (*buf == ' ') {
 		for(i = 1; chkbuf[i] == buf[i]; i++);
-		sprintf(msgbuf, "Bad check sum for line %ld of %s\n%%s",
-			fline[i], fname[i]);
+		/* Fix: Escape %s dynamically or use safe formatting */
+		sprintf(msgbuf, "Bad check sum for line %ld of %%s\n%%%%s", fline[i]);
 		mb = msgbuf;
-		}
-	scream(mb, csl);
+	}
+	scream(mb, fname[i]); // Properly pass the filename as an explicit argument
 	}
 
 #ifndef MSDOS
