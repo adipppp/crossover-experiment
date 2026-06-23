@@ -36,14 +36,18 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         ctxt_delta_crossover_only = None
         ctxt_delta_whole_process = None
         throttled_usec_delta = None
+        cache_miss_rate = None
         if sysmetrics_path.exists():
             try:
                 sysmetrics = json.loads(sysmetrics_path.read_text())
                 ctxt_delta_crossover_only = sysmetrics.get("involuntary_ctxt_switches_delta_crossover_phase_only")
                 ctxt_delta_whole_process = sysmetrics.get("involuntary_ctxt_switches_delta_whole_process")
                 throttled_usec_delta = sysmetrics.get("throttled_usec_delta")
+                cache_miss_rate = sysmetrics.get("cache_miss_rate")
             except json.JSONDecodeError:
                 print(f"PERINGATAN: gagal parse {sysmetrics_path}, metrik sistem run ini diabaikan.")
+
+        wall_clock = data.get("wall_clock_total_seconds_DO_NOT_USE_FOR_PHASE_ANALYSIS") or data.get("wall_clock_total_seconds")
 
         rows.append({
             "run_id": data.get("run_id"),
@@ -52,7 +56,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "status_code": data.get("status_code"),
             "crossover_seconds": data.get("crossover_seconds"),
             "barrier_seconds": data.get("barrier_seconds"),
-            "wall_clock_total_seconds": data.get("wall_clock_total_seconds"),
+            "wall_clock_total_seconds": wall_clock,
             "barrier_iter_count": data.get("barrier_iter_count"),
             # Metrik UTAMA untuk RQ2 — sudah diselaraskan ke rentang waktu fase
             # crossover saja oleh collect_system_metrics.py.
@@ -60,6 +64,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             # Disimpan untuk transparansi/audit, TIDAK dipakai pada uji RQ2.
             "involuntary_ctxt_switches_delta_whole_process": ctxt_delta_whole_process,
             "throttled_usec_delta": throttled_usec_delta,
+            "cache_miss_rate": cache_miss_rate,
             "discrepancy_warning": data.get("phase_timing_discrepancy_warning"),
             "error": data.get("error"),
         })
@@ -156,37 +161,48 @@ def run_mann_whitney_with_bonferroni(df: pd.DataFrame) -> dict:
 
 def run_correlation_analysis_per_condition(df: pd.DataFrame):
     """
-    RQ2: korelasi involuntary context switches (DI DALAM rentang fase crossover
-    saja) dengan crossover time.
-
-    Dihitung TERPISAH per kondisi (none dan static masing-masing), BUKAN
-    digabung — penggabungan lintas kondisi berisiko menghasilkan korelasi semu
-    yang sebenarnya hanya mencerminkan perbedaan rata-rata antar kondisi
-    (confounding), bukan hubungan di dalam satu kondisi. Lihat Subbab
-    "Analisis Data" pada Metode Penelitian.
+    RQ2: korelasi involuntary context switches dan cache miss rate (DI DALAM rentang
+    fase crossover saja) dengan crossover time.
     """
     print("=" * 70)
-    print("KORELASI (PER KONDISI): involuntary context switches fase-crossover vs crossover time")
+    print("KORELASI (PER KONDISI): involuntary context switches & cache miss rate vs crossover time")
     print("(Menjawab Rumusan Masalah poin 2)")
     print("=" * 70)
 
     for condition in sorted(df["condition"].unique()):
+        print(f"\n--- Kondisi: {condition} ---")
         subset = df[df["condition"] == condition]
-        clean = subset.dropna(subset=["involuntary_ctxt_switches_delta_crossover_only", "crossover_seconds"])
+        
+        # 1. Involuntary Context Switches Correlation
+        clean_ctxt = subset.dropna(subset=["involuntary_ctxt_switches_delta_crossover_only", "crossover_seconds"])
+        if len(clean_ctxt) < 4:
+            print(f"  [Context Switches] Data tidak cukup untuk korelasi (n={len(clean_ctxt)}).")
+        elif clean_ctxt["involuntary_ctxt_switches_delta_crossover_only"].nunique() <= 1:
+            val = clean_ctxt["involuntary_ctxt_switches_delta_crossover_only"].iloc[0]
+            print(f"  [Context Switches] Varians nol (semua bernilai {val}). Ini menunjukkan isolasi CPU bekerja dengan sempurna.")
+        else:
+            rho, p_value = stats.spearmanr(
+                clean_ctxt["involuntary_ctxt_switches_delta_crossover_only"], clean_ctxt["crossover_seconds"]
+            )
+            print(f"  [Context Switches] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ctxt)}")
 
-        if len(clean) < 4:
-            print(f"  Kondisi '{condition}': data tidak cukup untuk korelasi (n={len(clean)}).")
-            continue
+        # 2. Cache Miss Rate Correlation (PMU Counter Triangulation)
+        clean_cache = subset.dropna(subset=["cache_miss_rate", "crossover_seconds"])
+        if len(clean_cache) < 4:
+            print(f"  [Cache Miss Rate] Data tidak cukup untuk korelasi (n={len(clean_cache)}).")
+        elif clean_cache["cache_miss_rate"].nunique() <= 1:
+            val = clean_cache["cache_miss_rate"].iloc[0]
+            print(f"  [Cache Miss Rate] Varians nol (semua bernilai {val}).")
+        else:
+            rho, p_value = stats.spearmanr(
+                clean_cache["cache_miss_rate"], clean_cache["crossover_seconds"]
+            )
+            print(f"  [Cache Miss Rate] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_cache)}")
 
-        rho, p_value = stats.spearmanr(
-            clean["involuntary_ctxt_switches_delta_crossover_only"], clean["crossover_seconds"]
-        )
-        print(f"  Kondisi '{condition}': Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean)}")
     print(
-        "\n  Interpretasi: rho positif & signifikan DI DALAM kondisi yang sama -> lebih banyak\n"
-        "  gangguan penjadwalan (proksi migrasi thread) selama fase crossover berasosiasi dengan\n"
-        "  crossover time lebih lama, pada kondisi tersebut. Membandingkan antar kondisi (none vs\n"
-        "  static) TIDAK dilakukan lewat korelasi gabungan, melainkan lewat uji Mann-Whitney U di atas."
+        "\n  Interpretasi: rho positif & signifikan DI DALAM kondisi yang sama -> gangguan\n"
+        "  penjadwalan atau miss cache yang lebih tinggi berasosiasi dengan crossover time\n"
+        "  yang lebih lambat. Membandingkan antar kondisi (none vs static) diuji lewat Mann-Whitney U."
     )
     print()
 
@@ -275,6 +291,7 @@ def main():
 
     results_dir = Path(args.results_dir)
     df = load_results(results_dir)
+    flagged_df = pd.DataFrame()
 
     if df.empty:
         print("Tidak ada hasil ditemukan di", results_dir)
