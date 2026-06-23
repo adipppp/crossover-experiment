@@ -28,10 +28,15 @@ gcloud compute regions describe "$REGION" \
 
 ```
 
-Jika quota CPUS di region itu kurang dari 8, ajukan kenaikan kuota lewat
+Jika quota CPUS di region itu kurang dari **8**, ajukan kenaikan kuota lewat
 Console: **IAM & Admin > Quotas**, filter `CPUs`, region sesuai pilihan,
-request naik ke minimal 8. Proses approval biasanya cepat (menit-jam) untuk
-kenaikan kecil pada akun trial, tapi alokasikan waktu tunggu di rencana Anda.
+request naik ke minimal 8.
+
+> Catatan: meskipun `--threads-per-core=1` membuat VM hanya melihat 4 vCPU
+> dari dalam guest OS, GCP selalu menghitung **kuota berdasarkan machine type
+> (8 vCPU untuk c2-standard-8)** — bukan jumlah thread yang terlihat guest.
+
+Proses approval biasanya cepat (menit-jam) untuk kenaikan kecil pada akun trial.
 
 ### 1.3 Buat VM
 
@@ -41,6 +46,10 @@ ZONE="us-central1-a"   # sesuaikan dengan region yang quota-nya cukup
 gcloud compute instances create crossover-experiment-vm \
   --zone="$ZONE" \
   --machine-type="c2-standard-8" \
+  --min-cpu-platform="Intel Cascade Lake" \
+  --threads-per-core=1 \
+  --maintenance-policy=TERMINATE \
+  --no-restart-on-failure \
   --image-family="ubuntu-2204-lts" \
   --image-project="ubuntu-os-cloud" \
   --boot-disk-size="50GB" \
@@ -49,24 +58,46 @@ gcloud compute instances create crossover-experiment-vm \
 
 ```
 
+> **`--threads-per-core=1`** menonaktifkan SMT (Hyper-Threading) di level
+> hypervisor GCP — cara yang benar dan didukung resmi. Hasilnya: VM hanya
+> memiliki **4 vCPU** (1 thread per physical core) yang terlihat oleh guest OS.
+> Anda tetap ditagih untuk 8 vCPU penuh (`c2-standard-8`), tapi tiap vCPU
+> kini 1-to-1 dengan physical core — tidak ada SMT sharing antar-container.
+> Jangan gunakan `echo off > /sys/devices/system/cpu/smt/control` di dalam VM;
+> pada KVM GCP, interface sysfs tersebut read-only atau tidak fungsional.
+
 ### 1.4 Buka akses SSH (firewall) jika belum ada rule default
 
 ```bash
+# Dapatkan IP publik Anda (misal dari curl -s ifconfig.me)
+MY_IP="<IP_PUBLIK_ANDA>"
+
 gcloud compute firewall-rules create allow-ssh-crossover-experiment \
   --network=default \
   --allow=tcp:22 \
-  --source-ranges=0.0.0.0/0 \
+  --source-ranges="${MY_IP}/32" \
   --target-tags=crossover-experiment
 
 ```
 
-> Catatan keamanan: `source-ranges=0.0.0.0/0` membuka SSH dari semua IP. Untuk
-> keamanan lebih baik, ganti dengan IP publik Anda saja (cek di whatismyip.com),
-> mis. `--source-ranges=36.xxx.xxx.xxx/32`.
+> Catatan keamanan: Pada perintah di atas, ganti `<IP_PUBLIK_ANDA>` dengan alamat IP publik koneksi internet Anda. Ini membatasi akses SSH hanya dari IP Anda, jauh lebih aman dari `0.0.0.0/0`.
 
-### 1.5 SSH ke VM
+### 1.5 Transfer file proyek ke VM
+
+Jalankan perintah ini di **laptop Anda** (bukan di dalam VM) untuk mengirim seluruh file proyek crossover-experiment ke home directory VM:
 
 ```bash
+ZONE="us-central1-a"   # sesuaikan dengan zone VM Anda
+gcloud compute scp --recurse ./crossover-experiment crossover-experiment-vm:~/ --zone="$ZONE"
+
+```
+
+### 1.6 SSH ke VM
+
+Jalankan perintah ini di **laptop Anda** untuk masuk ke dalam shell VM:
+
+```bash
+ZONE="us-central1-a"   # sesuaikan dengan zone VM Anda
 gcloud compute ssh crossover-experiment-vm --zone="$ZONE"
 
 ```
@@ -81,9 +112,14 @@ gcloud compute ssh crossover-experiment-vm --zone="$ZONE"
 
 ```bash
 sudo apt-get update && sudo apt-get upgrade -y
-sudo apt-get install -y apt-transport-https ca-certificates curl gnupg software-properties-common
+sudo apt-get install -y apt-transport-https ca-certificates curl gnupg \
+  software-properties-common linux-tools-generic linux-tools-$(uname -r)
 
 ```
+
+> `linux-tools-*` diperlukan untuk `perf stat` yang dijalankan oleh
+> `collect_system_metrics.py` di host untuk mengukur cache misses dan hardware
+> performance counters.
 
 ### 2.2 Disable swap (syarat wajib kubelet)
 
@@ -92,6 +128,25 @@ sudo swapoff -a
 sudo sed -i '/ swap / s/^/#/' /etc/fstab
 
 ```
+
+### 2.2.1 Verifikasi SMT sudah dinonaktifkan oleh GCP
+
+SMT sudah dinonaktifkan saat pembuatan VM via `--threads-per-core=1` (§1.3).
+Langkah ini hanya memverifikasi hasilnya — tidak ada perintah tambahan yang dibutuhkan.
+
+```bash
+# Harus menunjukkan 4 (bukan 8) — karena SMT off di level hypervisor
+nproc
+
+# Verifikasi topologi: setiap 'Core(s) per socket' harus 1 thread
+lscpu | grep -E 'Thread|Core|Socket|CPU\(s\)'
+
+```
+
+> **Catatan tentang CPU Governor:** Pada VM GCP berbasis KVM, `cpupower frequency-set`
+> **tidak berpengaruh** karena frekuensi CPU dikelola oleh hypervisor, bukan guest OS.
+> Variabel ini tidak bisa dikontrol dari dalam VM — itulah sebabnya c2-standard-8
+> dipilih (Compute Optimized, frekuensi turbo konsisten per GCP SLA).
 
 ### 2.3 Install containerd
 
@@ -181,10 +236,34 @@ sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 
 ```
 
+> ⚠️ **PENTING — Konfigurasi Kubelet Eksperimen:**
+> Untuk single-node eksperimen ini, kita menyalin file konfigurasi Kubelet secara langsung ke `/var/lib/kubelet/config.yaml`. Karena tidak ada rencana melakukan upgrade cluster (`kubeadm upgrade`), cara langsung ini aman dan praktis.
+
+```bash
+# Salin konfigurasi kubelet baseline (Condition A - none) ke folder kubelet:
+sudo cp ~/crossover-experiment/kubelet-configs/condition-A-none.yaml \
+  /var/lib/kubelet/config.yaml
+
+# Nyalakan ulang kubelet agar perubahan terbaca:
+sudo systemctl restart kubelet
+
+# Verifikasi kubelet aktif dan setting terbaca:
+sudo systemctl is-active kubelet
+grep -E 'cpuManagerPolicy|systemReserved|kubeReserved|cpuManagerReconcilePeriod' \
+  /var/lib/kubelet/config.yaml
+
+```
+
+> **Catatan urutan:** Lakukan ini SEBELUM §2.8 (install Flannel) agar node
+> sudah dalam konfigurasi eksperimen yang benar sejak awal.
+
 ### 2.8 Install CNI plugin (Flannel — sederhana, cukup untuk single-node)
 
 ```bash
-kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+# Pin ke versi spesifik — JANGAN pakai /releases/latest karena mutable
+# Cek versi stable terbaru di: https://github.com/flannel-io/flannel/releases
+FLANNEL_VERSION="v0.28.0"
+kubectl apply -f "https://github.com/flannel-io/flannel/releases/download/${FLANNEL_VERSION}/kube-flannel.yml"
 
 ```
 
@@ -216,6 +295,30 @@ sudo chmod 440 /etc/sudoers.d/crictl-nopasswd
 
 ```
 
+### 2.12 Izinkan `perf stat` di host (wajib untuk `collect_system_metrics.py`)
+
+`collect_system_metrics.py` menjalankan `sudo perf stat -p <pid>` dari host
+untuk mengukur cache misses container solver. Default Ubuntu 22.04 memblokir ini.
+
+```bash
+# Aktifkan akses perf (permanen, bertahan setelah reboot):
+echo 'kernel.perf_event_paranoid = -1' | sudo tee /etc/sysctl.d/99-perf.conf
+sudo sysctl -p /etc/sysctl.d/99-perf.conf
+
+# Verifikasi (harus return -1):
+sysctl kernel.perf_event_paranoid
+
+# Tes perf bisa berjalan (harus tidak error):
+sudo perf stat -e cache-misses sleep 0.1 2>&1 | grep -E 'cache-misses|not supported'
+
+```
+
+> ⚠️ Jika `perf stat` mengembalikan `<not supported>` (bukan nilai angka),
+> artinya hardware PMU tidak di-expose oleh hypervisor GCP untuk VM ini.
+> Dalam kasus itu, `collect_system_metrics.py` akan tetap berjalan tapi
+> field `perf_metrics` di output JSON akan kosong — metrik utama
+> (context switches) tetap terkumpul via `/proc/<pid>/status`.
+
 ---
 
 ## Bagian 3 — Build & load image solver — DI DALAM VM
@@ -234,11 +337,12 @@ newgrp docker   # refresh group membership
 > Jika muncul `E: Sub-process /usr/bin/dpkg returned an error code (1)`, jalankan:
 > `sudo DEBIAN_FRONTEND=noninteractive dpkg --configure --force-confdef --force-confold -a`
 
-### 3.2 Transfer file proyek dari laptop Anda ke VM
+### 3.2 Sinkronisasi/Transfer ulang file proyek (Opsional)
 
-Di **laptop** (bukan di VM), jalankan:
+File proyek sudah ditransfer pada langkah 1.5. Namun jika Anda melakukan perubahan file di laptop Anda dan ingin menyinkronkannya kembali ke VM, jalankan perintah ini di **laptop Anda**:
 
 ```bash
+ZONE="us-central1-a"   # sesuaikan dengan zone VM Anda
 gcloud compute scp --recurse ./crossover-experiment crossover-experiment-vm:~/ --zone="$ZONE"
 
 ```
@@ -267,6 +371,7 @@ rm /tmp/solver-image.tar
 ### 4.1 Buat namespace dan storage
 
 ```bash
+cd ~/crossover-experiment
 kubectl apply -f manifests/00-namespace.yaml
 sudo mkdir -p /mnt/experiment-data/{instances,results}
 sudo chmod -R 777 /mnt/experiment-data
@@ -303,11 +408,18 @@ grep cpuManagerPolicy /var/lib/kubelet/config.yaml || echo "belum diset eksplisi
 
 ```
 
-### 5.2 Jalankan SATU run percobaan (smoke test) dengan alokasi 6 CPU
+### 5.2 Verifikasi alokasi CPU dan jalankan smoke test
+
+Dengan `--threads-per-core=1`, VM melihat **4 vCPU**. Kubelet mereservasi
+`systemReserved=500m + kubeReserved=500m = 1 CPU`, sehingga:
+`Allocatable = 4 - 1 = 3 CPU` untuk Pod solver.
 
 ```bash
+# Verifikasi allocatable CPU node (harus 3)
+kubectl get node -o jsonpath='{.items[0].status.allocatable.cpu}'
+
 chmod +x scripts/*.sh
-bash scripts/run_experiment.sh none 1 6
+bash scripts/run_experiment.sh none 1 3
 
 ```
 
@@ -334,14 +446,14 @@ kubectl uncordon crossover-experiment-vm
 ## Bagian 6 — Eksperimen penuh
 
 ```bash
-# Kondisi A (baseline) — N=15, 6 vCPU
-bash scripts/run_experiment.sh none 15 6
+# Kondisi A (baseline) — N=15, 3 vCPU
+bash scripts/run_experiment.sh none 15 3
 
 # Berpindah ke Kondisi B (perlakuan)
 bash scripts/switch_cpu_manager_policy.sh static
 
-# Kondisi B (perlakuan) — N=15, 6 vCPU
-bash scripts/run_experiment.sh static 15 6
+# Kondisi B (perlakuan) — N=15, 3 vCPU
+bash scripts/run_experiment.sh static 15 3
 
 ```
 
@@ -354,8 +466,8 @@ Untuk menjalankan skrip analisis, Anda memerlukan pengelola paket `pip` dan pust
 sudo apt-get update
 sudo apt-get install -y python3-pip
 
-# Install pustaka analisis (mengabaikan warning system-wide package di Ubuntu 22.04)
-pip3 install pandas scipy
+# Install pustaka analisis (mengabaikan error/warning system-wide package di Ubuntu 22.04)
+pip3 install --break-system-packages pandas scipy
 
 # Jalankan skrip analisis
 python3 scripts/analyze_results.py --results-dir /mnt/experiment-data/results
