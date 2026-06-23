@@ -88,7 +88,6 @@ class PhaseTimingCallback:
         self.barrier_first_seen_runtime = None
         self.barrier_last_runtime = None
         self.crossover_first_seen_runtime = None
-        self.simplex_last_runtime = None
 
     def __call__(self, model, where):
         if where == GRB.Callback.BARRIER:
@@ -97,26 +96,26 @@ class PhaseTimingCallback:
                 self.barrier_first_seen_runtime = t
             self.barrier_last_runtime = t
         elif where == GRB.Callback.SIMPLEX:
-            t = model.cbGet(GRB.Callback.RUNTIME)
             if self.crossover_first_seen_runtime is None:
-                # Callback SIMPLEX pertama setelah BARRIER pernah terlihat
-                # == awal crossover (push phase dimulai di sini).
-                self.crossover_first_seen_runtime = t
-            self.simplex_last_runtime = t
+                # Hanya catat waktu di iterasi PERTAMA untuk menghindari overhead Python GIL
+                self.crossover_first_seen_runtime = model.cbGet(GRB.Callback.RUNTIME)
 
-    def summary(self):
+    def summary(self, total_runtime):
+        # total_runtime didapat dari model.Runtime setelah optimize() selesai
         crossover_seconds = None
-        if self.crossover_first_seen_runtime is not None and self.simplex_last_runtime is not None:
-            crossover_seconds = round(self.simplex_last_runtime - self.crossover_first_seen_runtime, 6)
+        if self.crossover_first_seen_runtime is not None:
+            crossover_seconds = round(total_runtime - self.crossover_first_seen_runtime, 6)
+        
         barrier_seconds = None
         if self.barrier_first_seen_runtime is not None and self.barrier_last_runtime is not None:
             barrier_seconds = round(self.barrier_last_runtime - self.barrier_first_seen_runtime, 6)
+            
         return {
             "barrier_start_runtime": self.barrier_first_seen_runtime,
             "barrier_end_runtime": self.barrier_last_runtime,
             "barrier_duration_seconds_callback": barrier_seconds,
             "crossover_start_runtime": self.crossover_first_seen_runtime,
-            "crossover_end_runtime": self.simplex_last_runtime,
+            "crossover_end_runtime": total_runtime,
             "crossover_duration_seconds_callback": crossover_seconds,
         }
 
@@ -159,6 +158,9 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if "/" in args.run_id or "\\" in args.run_id or ".." in args.run_id:
+        raise ValueError("FATAL: run-id contains invalid path traversal characters.")
+        
     log_path = str(output_dir / f"{args.run_id}.log")
     out_path = output_dir / f"{args.run_id}.json"
 
@@ -197,7 +199,7 @@ def main():
         wall_clock_total = t_end - t_start
         gurobi_runtime_attr = model.Runtime  # atribut resmi Gurobi, dalam detik
 
-        callback_summary = phase_cb.summary()
+        callback_summary = phase_cb.summary(model.Runtime)
         log_derived = parse_log_for_phase_split(log_path)  # cross-check sekunder, granularitas 1 detik
 
         result = {
@@ -206,7 +208,9 @@ def main():
             "instance": args.instance,
             "pid_in_container": pid,
             "status_code": model.Status,
-            "wall_clock_total_seconds": wall_clock_total,
+            # wall_clock_total_seconds_DO_NOT_USE_FOR_PHASE_ANALYSIS contains Python process-level wall time.
+            # Use callback-derived crossover_seconds / barrier_seconds for actual phase analysis.
+            "wall_clock_total_seconds_DO_NOT_USE_FOR_PHASE_ANALYSIS": wall_clock_total,
             "gurobi_runtime_attribute_seconds": gurobi_runtime_attr,
             "barrier_iter_count": getattr(model, "BarIterCount", None),
             "simplex_iter_count": getattr(model, "IterCount", None),
