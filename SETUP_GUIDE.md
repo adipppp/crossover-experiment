@@ -10,7 +10,7 @@ Gurobi WLS) tidak bisa diotomasi penuh — wajar untuk dijalankan manual.
 ### 1.1 Install & autentikasi gcloud CLI (kalau belum)
 ```bash
 # Cek apakah sudah terinstal
-gcloud version || echo "Belum terinstal, lihat [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)"
+gcloud version || echo "Belum terinstal, lihat https://cloud.google.com/sdk/docs/install"
 
 gcloud auth login
 gcloud config set project <PROJECT_ID_ANDA>
@@ -128,10 +128,10 @@ sudo sysctl --system
 ### 2.5 Install kubeadm, kubelet, kubectl
 
 ```bash
-curl -fsSL [https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key](https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key) | \
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | \
   sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] [https://pkgs.k8s.io/core:/stable:/v1.31/deb/](https://pkgs.k8s.io/core:/stable:/v1.31/deb/) /' | \
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | \
   sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
@@ -151,7 +151,7 @@ PID host dari container solver.
 
 ```bash
 CRICTL_VERSION="v1.31.1"   # samakan major.minor dengan versi Kubernetes di 2.5
-curl -fsSL "[https://github.com/kubernetes-sigs/cri-tools/releases/download/$](https://github.com/kubernetes-sigs/cri-tools/releases/download/$){CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
+curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
   -o /tmp/crictl.tar.gz
 sudo tar zxvf /tmp/crictl.tar.gz -C /usr/local/bin
 rm /tmp/crictl.tar.gz
@@ -184,7 +184,7 @@ sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 ### 2.8 Install CNI plugin (Flannel — sederhana, cukup untuk single-node)
 
 ```bash
-kubectl apply -f [https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml](https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml)
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 
 ```
 
@@ -223,7 +223,7 @@ sudo chmod 440 /etc/sudoers.d/crictl-nopasswd
 ### 3.1 Install Docker (untuk build image; containerd dipakai runtime Kubernetes)
 
 ```bash
-curl -fsSL [https://get.docker.com](https://get.docker.com) | sudo sh
+curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
 newgrp docker   # refresh group membership
 
