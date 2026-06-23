@@ -44,6 +44,13 @@ def find_pod_sandbox_id(pod_name: str) -> str:
         items = data.get("items", [])
         if not items:
             raise LookupError(f"Tidak ada pod sandbox dengan nama '{pod_name}' ditemukan via crictl pods.")
+        
+        # Filter sandbox yang berstatus READY terlebih dahulu untuk menghindari instans lama yang mati
+        ready_items = [item for item in items if item.get("state") == "SANDBOX_READY"]
+        if ready_items:
+            return ready_items[0]["id"]
+            
+        # Fallback ke item pertama jika tidak ada yang READY (misal sudah keburu exit)
         return items[0]["id"]
     except (subprocess.CalledProcessError, KeyError, IndexError, json.JSONDecodeError, LookupError) as e:
         print(f"FATAL: gagal menemukan sandbox ID untuk pod '{pod_name}': {e}", file=sys.stderr)
@@ -103,13 +110,33 @@ def find_cgroup_path(pid: int) -> Path:
 
 
 def read_proc_status_ctxt_switches(pid: int) -> dict:
-    status_path = Path(f"/proc/{pid}/status")
-    text = status_path.read_text()
-    voluntary = re.search(r"voluntary_ctxt_switches:\s+(\d+)", text)
-    nonvoluntary = re.search(r"nonvoluntary_ctxt_switches:\s+(\d+)", text)
+    """
+    Membaca dan menjumlahkan context switches dari seluruh thread proses (task)
+    di bawah /proc/<pid>/task/<tid>/status untuk mendukung workload multi-threaded.
+    """
+    total_voluntary = 0
+    total_involuntary = 0
+    task_dir = Path(f"/proc/{pid}/task")
+    if not task_dir.exists():
+        raise FileNotFoundError(f"Direktori task untuk PID {pid} tidak ditemukan.")
+
+    for tid_dir in task_dir.iterdir():
+        status_path = tid_dir / "status"
+        if status_path.exists():
+            try:
+                text = status_path.read_text()
+                voluntary = re.search(r"voluntary_ctxt_switches:\s+(\d+)", text)
+                nonvoluntary = re.search(r"nonvoluntary_ctxt_switches:\s+(\d+)", text)
+                if voluntary:
+                    total_voluntary += int(voluntary.group(1))
+                if nonvoluntary:
+                    total_involuntary += int(nonvoluntary.group(1))
+            except FileNotFoundError:
+                pass  # thread mungkin sudah exited di antara iterasi
+                
     return {
-        "voluntary_ctxt_switches": int(voluntary.group(1)) if voluntary else None,
-        "involuntary_ctxt_switches": int(nonvoluntary.group(1)) if nonvoluntary else None,
+        "voluntary_ctxt_switches": total_voluntary,
+        "involuntary_ctxt_switches": total_involuntary,
     }
 
 

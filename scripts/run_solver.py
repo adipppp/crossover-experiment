@@ -91,14 +91,20 @@ class PhaseTimingCallback:
 
     def __call__(self, model, where):
         if where == GRB.Callback.BARRIER:
-            t = model.cbGet(GRB.Callback.RUNTIME)
-            if self.barrier_first_seen_runtime is None:
-                self.barrier_first_seen_runtime = t
-            self.barrier_last_runtime = t
+            try:
+                t = model.cbGet(GRB.Callback.RUNTIME)
+                if self.barrier_first_seen_runtime is None:
+                    self.barrier_first_seen_runtime = t
+                self.barrier_last_runtime = t
+            except gp.GurobiError as e:
+                print(f"PERINGATAN: Gagal memanggil cbGet di BARRIER callback: {e}", file=sys.stderr)
         elif where == GRB.Callback.SIMPLEX:
             if self.crossover_first_seen_runtime is None:
                 # Hanya catat waktu di iterasi PERTAMA untuk menghindari overhead Python GIL
-                self.crossover_first_seen_runtime = model.cbGet(GRB.Callback.RUNTIME)
+                try:
+                    self.crossover_first_seen_runtime = model.cbGet(GRB.Callback.RUNTIME)
+                except gp.GurobiError as e:
+                    print(f"PERINGATAN: Gagal memanggil cbGet di SIMPLEX callback: {e}", file=sys.stderr)
 
     def summary(self, total_runtime):
         # total_runtime didapat dari model.Runtime setelah optimize() selesai
@@ -174,6 +180,7 @@ def main():
                                         # menjalankan simplex paralel terpisah dari barrier, sehingga
                                         # asumsi "callback SIMPLEX pertama = awal crossover" tidak valid.
         env.setParam("Crossover", 4)   # default; aktifkan crossover (bukan 0/disabled)
+        env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
         if args.threads > 0:
             env.setParam("Threads", args.threads)
 
