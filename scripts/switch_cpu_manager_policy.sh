@@ -27,7 +27,8 @@ fi
 
 echo ">>> [1/6] Draining node $NODE_NAME (mengevict Pod aktif sementara)..."
 kubectl drain "$NODE_NAME" --ignore-daemonsets --delete-emptydir-data --force --timeout=120s || {
-  echo "PERINGATAN: drain gagal/timeout. Periksa Pod yang masih tersisa dengan:" >&2
+  echo "PERINGATAN: drain gagal/timeout. Melakukan uncordon rollback..." >&2
+  kubectl uncordon "$NODE_NAME"
   echo "  kubectl get pods --all-namespaces -o wide --field-selector spec.nodeName=$NODE_NAME" >&2
   exit 1
 }

@@ -128,20 +128,7 @@ def read_cgroup_cpu_stat(cgroup_path: Path) -> dict:
 def align_samples_to_crossover_phase(samples, solver_result_path: Path):
     """
     Memotong time-series sample involuntary_ctxt_switches agar hanya mencakup
-    rentang waktu fase crossover saja — BUKAN seluruh siklus hidup proses
-    (startup, presolve, barrier, dst).
-
-    Cara kerja: run_solver.py mencatat `optimize_start_epoch_unix` (wall-clock
-    epoch tepat sebelum model.optimize() dipanggil) beserta `phase_timing`
-    (crossover_start_runtime, crossover_end_runtime — relatif terhadap awal
-    optimize(), dari callback Gurobi RUNTIME). Karena container dan host
-    berbagi clock kernel yang sama (runc, tanpa virtualisasi clock terpisah),
-    crossover_start_epoch = optimize_start_epoch_unix + crossover_start_runtime
-    dapat dipakai langsung untuk memotong sample yang ditimestamp time.time()
-    di skrip ini.
-
-    Mengembalikan delta involuntary_ctxt_switches HANYA dalam rentang fase
-    crossover, atau None jika data pendukung tidak tersedia.
+    rentang waktu fase crossover saja — BUKAN seluruh siklus hidup proses.
     """
     if not solver_result_path.exists():
         print(
@@ -176,8 +163,10 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
     if not samples:
         return None
 
-    # Cari sample TERAKHIR dengan timestamp <= crossover_start_epoch (nilai
-    # counter pada/sesaat sebelum crossover dimulai).
+    # Urutkan secara eksplisit agar aman dari segala bug log sampling
+    samples.sort(key=lambda x: x[0])
+
+    # Cari sample TERAKHIR dengan timestamp <= crossover_start_epoch
     count_at_start = None
     for ts, count in samples:
         if ts <= crossover_start_epoch:
@@ -185,17 +174,46 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
         else:
             break
 
-    # Cari sample TERAKHIR dengan timestamp <= crossover_end_epoch (nilai
-    # counter pada/sesaat sebelum crossover berakhir).
+    # Cari sample TERAKHIR dengan timestamp <= crossover_end_epoch
     count_at_end = None
     for ts, count in samples:
         if ts <= crossover_end_epoch:
             count_at_end = count
 
     if count_at_start is None or count_at_end is None:
+        print(
+            "WARNING: Gagal menemukan sampel metrics sebelum/sesudah crossover. Delta tidak presisi.",
+            file=sys.stderr,
+        )
         return None
 
     return count_at_end - count_at_start
+
+
+def parse_perf_stat(log_path: Path) -> dict:
+    """
+    Mempersing hasil output dari file log mentah sudo perf stat.
+    """
+    if not log_path.exists():
+        return {}
+    text = log_path.read_text()
+    res = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.search(r"^([\d,.]+)\s+([\w-]+)", line)
+        if match:
+            val_str = match.group(1).replace(",", "")
+            event = match.group(2)
+            try:
+                if "." in val_str:
+                    res[event] = float(val_str)
+                else:
+                    res[event] = int(val_str)
+            except ValueError:
+                pass
+    return res
 
 
 def main():
@@ -215,6 +233,25 @@ def main():
     pid = find_container_pid(args.pod_name, args.container_name)
     cgroup_path = find_cgroup_path(pid)
     print(f"[collect_system_metrics] Memantau PID host {pid}, cgroup {cgroup_path}")
+
+    # Launch background perf stat targeting the host process
+    perf_log = Path(args.output).with_suffix(".perf.txt")
+    perf_cmd = [
+        "sudo", "perf", "stat",
+        "-p", str(pid),
+        "-e", "cache-misses,cache-references,L1-dcache-load-misses,L1-dcache-loads,instructions,cycles",
+        "--", "sleep", "1800"
+    ]
+    perf_proc = None
+    perf_log_file = None
+    try:
+        perf_log_file = open(perf_log, "w")
+        perf_proc = subprocess.Popen(perf_cmd, stderr=perf_log_file, stdout=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"WARNING: Gagal menjalankan perf stat: {e}", file=sys.stderr)
+        if perf_log_file is not None:
+            perf_log_file.close()
+            perf_log_file = None
 
     snapshot_before_cpu = read_cgroup_cpu_stat(cgroup_path)
 
@@ -241,16 +278,45 @@ def main():
         time.sleep(args.poll_interval)
     t_end = time.time()
 
+    # Terminate perf process if it was started
+    if perf_proc is not None:
+        try:
+            perf_proc.terminate()
+            perf_proc.wait(timeout=5)
+        except Exception:
+            pass
+    if perf_log_file is not None:
+        perf_log_file.close()
+
     # cgroup biasanya masih tersedia sesaat setelah proses exit (sebelum container
     # dihapus oleh kubelet), tapi ini RACE CONDITION — baca secepat mungkin.
     snapshot_after_cpu = read_cgroup_cpu_stat(cgroup_path) if cgroup_path.exists() else {}
 
     # Penyelarasan ke fase crossover: baca file hasil JSON utama dari run_solver.py
-    # (sudah pasti tertulis di titik ini, karena ditulis SEBELUM proses exit).
+    # (sudah pasti tertulis di titik ini, karena ditulis SEBELUM proses exit, namun
+    # kita wajib menunggu kubectl cp menyalinnya ke Host filesystem).
     solver_result_path = Path(args.results_dir) / f"{args.run_id}.json"
+    sentinel_path = solver_result_path.with_suffix(".cp_done")
+    
+    # Tunggu sentinel hingga maksimal 15 detik (mengakomodasi delay I/O VM/k8s cp)
+    deadline = time.time() + 15.0
+    while not sentinel_path.exists() and time.time() < deadline:
+        time.sleep(0.05)
+
     crossover_phase_delta = align_samples_to_crossover_phase(samples, solver_result_path)
 
     whole_process_delta = (samples[-1][1] - samples[0][1]) if len(samples) >= 2 else None
+
+    # Parse raw perf stats
+    perf_metrics = parse_perf_stat(perf_log)
+    # Clean up the raw file
+    if perf_log.exists():
+        perf_log.unlink()
+
+    # Calculate Cache Miss Rate
+    cache_misses = perf_metrics.get("cache-misses", 0)
+    cache_references = perf_metrics.get("cache-references", 0)
+    cache_miss_rate = (cache_misses / cache_references) if cache_references > 0 else None
 
     result = {
         "pid_host": pid,
@@ -276,6 +342,9 @@ def main():
             snapshot_after_cpu.get("throttled_usec", 0) - snapshot_before_cpu.get("throttled_usec", 0)
             if snapshot_after_cpu and snapshot_before_cpu else None
         ),
+        # Hardware performance counters (triangulasi proksi RQ2)
+        "perf_metrics": perf_metrics,
+        "cache_miss_rate": cache_miss_rate,
     }
 
     Path(args.output).write_text(json.dumps(result, indent=2))

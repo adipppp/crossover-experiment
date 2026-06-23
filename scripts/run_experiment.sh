@@ -16,7 +16,7 @@ set -euo pipefail
 
 CONDITION="${1:-}"
 N_REPS="${2:-15}"
-CPU_COUNT="${3:-7}"
+CPU_COUNT="${3:-6}"
 
 if [[ "$CONDITION" != "none" && "$CONDITION" != "static" ]]; then
   echo "Penggunaan: $0 <none|static> <jumlah_repetisi> <cpu_count>" >&2
@@ -75,6 +75,11 @@ for instance in "${INSTANCES[@]}"; do
     echo ">>> RUN: $run_id"
     echo "---------------------------------------------------------------"
 
+    if [[ -s "$RESULTS_DIR/${run_id}.sysmetrics.json" && -s "$RESULTS_DIR/${run_id}.podlog.txt" && -s "$RESULTS_DIR/${run_id}.json" ]]; then
+      echo ">>> RUN $run_id sudah memiliki hasil utuh. Melewati (skip)..."
+      continue
+    fi
+
     # Render manifest Pod dari template dengan placeholder substitution.
     rendered_manifest="/tmp/${pod_name}.yaml"
     sed \
@@ -119,6 +124,9 @@ for instance in "${INSTANCES[@]}"; do
       --poll-interval 0.05 \
       --output "$metrics_output" &
     METRICS_PID=$!
+    
+    # Pin metrics collector to core 0 (system reserved) to prevent interference with solver
+    taskset -cp 0 $METRICS_PID >/dev/null 2>&1 || true
 
     echo ">>> Menunggu Pod selesai (solve berjalan)..."
     TIMEOUT=1800
@@ -143,8 +151,19 @@ for instance in "${INSTANCES[@]}"; do
         ELAPSED=$((ELAPSED + 5))
     done
 
+    # Ambil hasil JSON dari tmpfs Pod menggunakan kubectl cp sebelum Pod dihapus
+    echo ">>> Mengambil file hasil JSON dari tmpfs Pod..."
+    if kubectl cp "$NAMESPACE/$pod_name:/app/results/${run_id}.json" "$RESULTS_DIR/${run_id}.json" 2> "$RESULTS_DIR/${run_id}.cp_err.log"; then
+      touch "$RESULTS_DIR/${run_id}.cp_done"
+    else
+      echo "PERINGATAN: Gagal menyalin file hasil JSON dari Pod ${pod_name}." >&2
+    fi
+
     # Tunggu proses monitoring background ikut selesai (PID sudah exit di dalamnya).
     wait "$METRICS_PID" || echo "PERINGATAN: collect_system_metrics.py keluar dengan error untuk $run_id"
+
+    # Bersihkan file sentinel
+    rm -f "$RESULTS_DIR/${run_id}.cp_done"
 
     echo ">>> Mengambil log dan hasil JSON dari Pod (sebelum dihapus)..."
     kubectl logs "$pod_name" -n "$NAMESPACE" > "$RESULTS_DIR/${run_id}.podlog.txt" 2>&1 || true
@@ -153,6 +172,12 @@ for instance in "${INSTANCES[@]}"; do
     kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=true --timeout=60s
 
     rm -f "$rendered_manifest"
+
+    # Bersihkan L3 Cache dan Page Cache di Host di antara run pengujian
+    echo ">>> Mengosongkan host page cache & syncing..."
+    sync
+    echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+    sleep 2
 
     # --- TAMBAHAN FIX LISENSI ---
     echo ">>> Menunggu 10 detik agar server Gurobi WLS merilis token lisensi..."
