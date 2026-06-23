@@ -20,8 +20,8 @@ gcloud config set project <PROJECT_ID_ANDA>
 ### 1.2 Cek dan minta kuota CPU di region pilihan (PENTING — sering jadi penghambat)
 
 ```bash
-# Ganti REGION sesuai pilihan, mis. asia-southeast1 (Singapura, dekat Indonesia)
-REGION="asia-southeast1"
+# Ganti REGION sesuai pilihan, mis. us-central1
+REGION="us-central1"
 
 gcloud compute regions describe "$REGION" \
   --format="table(quotas.filter(metric='CPUS'))"
@@ -36,7 +36,7 @@ kenaikan kecil pada akun trial, tapi alokasikan waktu tunggu di rencana Anda.
 ### 1.3 Buat VM
 
 ```bash
-ZONE="asia-southeast1-a"   # sesuaikan dengan region yang quota-nya cukup
+ZONE="us-central1-a"   # sesuaikan dengan region yang quota-nya cukup
 
 gcloud compute instances create crossover-experiment-vm \
   --zone="$ZONE" \
@@ -128,10 +128,10 @@ sudo sysctl --system
 ### 2.5 Install kubeadm, kubelet, kubectl
 
 ```bash
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | \
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key | \
   sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | \
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /' | \
   sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
@@ -140,7 +140,7 @@ sudo apt-mark hold kubelet kubeadm kubectl
 
 ```
 
-> Catatan: ganti `v1.31` di atas dengan versi minor stabil terbaru jika
+> Catatan: ganti `v1.36` di atas dengan versi minor stabil terbaru jika
 > sudah ada rilis lebih baru saat Anda membaca ini — cek di
 > https://kubernetes.io/releases/
 
@@ -150,7 +150,7 @@ sudo apt-mark hold kubelet kubeadm kubectl
 PID host dari container solver.
 
 ```bash
-CRICTL_VERSION="v1.31.1"   # samakan major.minor dengan versi Kubernetes di 2.5
+CRICTL_VERSION="v1.36.0"   # samakan major.minor dengan versi Kubernetes di 2.5
 curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
   -o /tmp/crictl.tar.gz
 sudo tar zxvf /tmp/crictl.tar.gz -C /usr/local/bin
@@ -223,7 +223,8 @@ sudo chmod 440 /etc/sudoers.d/crictl-nopasswd
 ### 3.1 Install Docker (untuk build image; containerd dipakai runtime Kubernetes)
 
 ```bash
-curl -fsSL https://get.docker.com | sudo sh
+sudo apt-get update
+sudo apt-get install -y docker.io
 sudo usermod -aG docker "$USER"
 newgrp docker   # refresh group membership
 
@@ -231,7 +232,7 @@ newgrp docker   # refresh group membership
 
 > ⚠️ **Troubleshooting: dpkg error setelah install Docker**
 > Jika muncul `E: Sub-process /usr/bin/dpkg returned an error code (1)`, jalankan:
-> `DEBIAN_FRONTEND=noninteractive dpkg --configure --force-confdef --force-confold -a`
+> `sudo DEBIAN_FRONTEND=noninteractive dpkg --configure --force-confdef --force-confold -a`
 
 ### 3.2 Transfer file proyek dari laptop Anda ke VM
 
