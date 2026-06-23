@@ -32,6 +32,10 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             print(f"PERINGATAN: gagal parse {json_path}, dilewati.")
             continue
 
+        # Validasi struktur data hasil solver untuk menghindari file JSON lain di direktori yang sama
+        if not isinstance(data, dict) or "run_id" not in data or "condition" not in data or "instance" not in data:
+            continue
+
         sysmetrics_path = results_dir / f"{data['run_id']}.sysmetrics.json"
         ctxt_delta_crossover_only = None
         ctxt_delta_whole_process = None
