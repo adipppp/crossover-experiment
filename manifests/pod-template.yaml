@@ -24,6 +24,20 @@ spec:
   # Tidak ada nodeSelector/affinity karena ini cluster single-node;
   # di cluster multi-node, WAJIB ditambahkan nodeName/nodeSelector
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
+  initContainers:
+    - name: copy-instance
+      image: busybox:1.36
+      imagePullPolicy: IfNotPresent
+      command:
+        - sh
+        - -c
+        - "cp /app/host-instances/__INSTANCE_FILE__ /app/instances/__INSTANCE_FILE__"
+      volumeMounts:
+        - name: host-instances
+          mountPath: /app/host-instances
+          readOnly: true
+        - name: instances-tmpfs
+          mountPath: /app/instances
   containers:
     - name: solver
       image: crossover-experiment/gurobi-solver:latest
@@ -55,18 +69,24 @@ spec:
       resources:
         requests:
           cpu: "__CPU_COUNT__"
-          memory: "4Gi"
+          memory: "24Gi"
         limits:
           cpu: "__CPU_COUNT__"
-          memory: "4Gi"
+          memory: "24Gi"
       volumeMounts:
-        - name: experiment-data
+        - name: instances-tmpfs
           mountPath: /app/instances
-          subPath: instances
-        - name: experiment-data
+        - name: results-tmpfs
           mountPath: /app/results
-          subPath: results
   volumes:
-    - name: experiment-data
-      persistentVolumeClaim:
-        claimName: experiment-data-pvc
+    - name: host-instances
+      hostPath:
+        path: /mnt/experiment-data/instances
+        type: Directory
+    - name: instances-tmpfs
+      emptyDir:
+        medium: Memory
+    - name: results-tmpfs
+      emptyDir:
+        medium: Memory
+        sizeLimit: "512Mi"

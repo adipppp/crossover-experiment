@@ -19,6 +19,8 @@ clusterDomain: cluster.local
 containerRuntimeEndpoint: unix:///var/run/containerd/containerd.sock
 cpuManagerReconcilePeriod: 0s
 cpuManagerPolicy: static
+cpuManagerPolicyOptions:
+  full-pcpus-only: "true"
 crashLoopBackOff: {}
 evictionPressureTransitionPeriod: 0s
 fileCheckFrequency: 0s
