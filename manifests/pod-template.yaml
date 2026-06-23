@@ -26,7 +26,12 @@ spec:
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
   initContainers:
     - name: copy-instance
-      image: busybox:1.36
+      # Digest di bawah adalah untuk busybox:1.36 linux/amd64.
+      # SEBELUM deploy, verifikasi dengan:
+      #   docker pull busybox:1.36 --platform linux/amd64
+      #   docker inspect busybox:1.36 --format='{{index .RepoDigests 0}}'
+      # lalu ganti digest berikut jika berbeda.
+      image: busybox@sha256:1827167fde90df99d9341a27fbce2b445550eb2b18105e03f98102f00c0ec35e
       imagePullPolicy: IfNotPresent
       command:
         - sh
