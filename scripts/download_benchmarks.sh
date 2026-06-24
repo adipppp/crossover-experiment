@@ -6,18 +6,24 @@
 #   .bz2 (bzip2) → bzip2 -dc → netlib compressed MPS → emps → plain .mps
 #
 # Pastikan emps sudah dikompilasi sebelum menjalankan skrip ini:
-#   gcc -O2 -m64 -o /usr/local/bin/emps /path/to/emps.c
+#   gcc -O2 -m64 -o /path/ke/emps /path/to/emps.c
+#
+# Path emps bisa di mana saja. Override default dengan env var:
+#   EMPS_BIN=/path/ke/emps bash scripts/download_benchmarks.sh
 
 set -euo pipefail
 
 DEST_DIR="/mnt/experiment-data/instances"
-# Path ke binary emps hasil kompilasi emps.c
+# Path ke binary emps hasil kompilasi emps.c.
+# Default: /usr/local/bin/emps — override via env var jika emps ada di lokasi lain.
+# Contoh: EMPS_BIN=~/crossover-experiment/emps bash scripts/download_benchmarks.sh
 EMPS_BIN="${EMPS_BIN:-/usr/local/bin/emps}"
 
 # Validasi emps tersedia
-if ! command -v "$EMPS_BIN" &>/dev/null && [[ ! -x "$EMPS_BIN" ]]; then
-  echo "ERROR: emps binary tidak ditemukan di '$EMPS_BIN'." >&2
-  echo "       Kompilasi terlebih dahulu: gcc -O2 -m64 -o $EMPS_BIN /path/to/emps.c" >&2
+if [[ ! -x "$EMPS_BIN" ]]; then
+  echo "ERROR: emps binary tidak ditemukan atau tidak executable di '$EMPS_BIN'." >&2
+  echo "       Kompilasi: gcc -O2 -m64 -o /path/ke/emps /path/to/emps.c" >&2
+  echo "       Lalu jalankan: EMPS_BIN=/path/ke/emps bash $0" >&2
   exit 1
 fi
 
