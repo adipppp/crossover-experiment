@@ -38,7 +38,7 @@ crossover-experiment/
 
 3. **Pemisahan fase barrier/crossover via callback Gurobi** — `run_solver.py` memakai `GRB.Callback.RUNTIME` pada *callback* `BARRIER` dan `SIMPLEX` untuk presisi waktu tinggi. **`Method=2`** diset eksplisit agar Gurobi menggunakan *barrier* murni, sehingga transisi ke *simplex* (crossover) menjadi jelas.
 
-4. **Kapasitas vs Alokasi Eksperimen (6 vCPU)** — Eksperimen dilakukan pada VM berkapasitas 8 vCPU. Untuk menghindari kondisi *Insufficient CPU* dan menjaga Kubelet tetap hidup, **2 vCPU** direstorasi khusus untuk sistem (`kubeReserved`, `systemReserved`, dan toleransi *DaemonSet* K8s). Skrip karenanya dieksekusi dengan parameter eksklusif **6 vCPU** untuk Gurobi *solver*.
+4. **Kapasitas vs Alokasi Eksperimen (3 vCPU)** — Eksperimen dilakukan pada VM `c2-standard-8` dengan `--threads-per-core=1`, sehingga guest OS melihat **4 vCPU** (1 thread per physical core). Kubelet mereservasi **1 CPU** (`systemReserved=500m` + `kubeReserved=500m`), sehingga **3 vCPU** tersedia sebagai *Allocatable* untuk Pod solver. Skrip dieksekusi dengan parameter **3 vCPU** untuk Gurobi *solver*.
 
 5. **Drain-stop-hapus state-ganti config-start-uncordon** — Bukan sekadar mengedit file lalu *restart*. Tanpa menghapus `/var/lib/kubelet/cpu_manager_state`, kubelet bisa mempertahankan alokasi core dari sebelumnya, atau justru merusak inisialisasi jika reservasi `systemReserved` berubah.
 
