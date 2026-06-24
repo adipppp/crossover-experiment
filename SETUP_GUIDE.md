@@ -425,14 +425,20 @@ grep cpuManagerPolicy /var/lib/kubelet/config.yaml || echo "belum diset eksplisi
 
 Dengan `--threads-per-core=1`, VM melihat **4 vCPU**. Kubelet mereservasi
 `systemReserved=500m + kubeReserved=500m = 1 CPU`, sehingga:
-`Allocatable = 4 - 1 = 3 CPU` untuk Pod solver.
+`Allocatable = 4 - 1 = 3 CPU`.
+
+Namun, DaemonSet sistem (kube-proxy, CoreDNS, dll.) mengonsumsi sebagian CPU
+tersebut secara request. Solver harus meminta **2 CPU** agar muat dijadwalkan.
 
 ```bash
 # Verifikasi allocatable CPU node (harus 3)
 kubectl get node -o jsonpath='{.items[0].status.allocatable.cpu}'
 
+# Verifikasi headroom yang tersedia untuk Pod baru
+kubectl describe node | grep -A5 "Allocated resources"
+
 chmod +x scripts/*.sh
-bash scripts/run_experiment.sh none 1 3
+bash scripts/run_experiment.sh none 1 2
 
 ```
 
@@ -459,14 +465,14 @@ kubectl uncordon crossover-experiment-vm
 ## Bagian 6 — Eksperimen penuh
 
 ```bash
-# Kondisi A (baseline) — N=15, 3 vCPU
-bash scripts/run_experiment.sh none 15 3
+# Kondisi A (baseline) — N=15, 2 vCPU
+bash scripts/run_experiment.sh none 15 2
 
 # Berpindah ke Kondisi B (perlakuan)
 bash scripts/switch_cpu_manager_policy.sh static
 
-# Kondisi B (perlakuan) — N=15, 3 vCPU
-bash scripts/run_experiment.sh static 15 3
+# Kondisi B (perlakuan) — N=15, 2 vCPU
+bash scripts/run_experiment.sh static 15 2
 
 ```
 

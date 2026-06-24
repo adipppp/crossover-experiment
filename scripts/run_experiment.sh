@@ -9,14 +9,14 @@
 # Penggunaan:
 #   ./run_experiment.sh <none|static> <jumlah_repetisi> <cpu_count>
 # Contoh (N=15 sesuai Metode Penelitian — lihat justifikasi jumlah repetisi di sana):
-#   ./run_experiment.sh none 15 3
-#   ./run_experiment.sh static 15 3
+#   ./run_experiment.sh none 15 2
+#   ./run_experiment.sh static 15 2
 
 set -euo pipefail
 
 CONDITION="${1:-}"
 N_REPS="${2:-15}"
-CPU_COUNT="${3:-3}"
+CPU_COUNT="${3:-2}"
 
 if [[ "$CONDITION" != "none" && "$CONDITION" != "static" ]]; then
   echo "Penggunaan: $0 <none|static> <jumlah_repetisi> <cpu_count>" >&2

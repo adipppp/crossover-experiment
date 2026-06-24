@@ -1,9 +1,9 @@
 # Template Pod untuk satu kali run solver.
 #
 # PENTING — syarat Guaranteed QoS (wajib untuk kebijakan CPU Manager `static`):
-#   1. requests.cpu HARUS SAMA dengan limits.cpu
-#   2. requests.memory HARUS SAMA dengan limits.memory
-#   3. Nilai CPU HARUS INTEGER (mis. "6", bukan "6.5" atau "6500m")
+#   1. requests.cpu HARUS SAMA dengan limits.cpu — untuk SEMUA container (termasuk init)
+#   2. requests.memory HARUS SAMA dengan limits.memory — untuk SEMUA container (termasuk init)
+#   3. Nilai CPU container solver HARUS INTEGER (mis. "2", bukan "2.5" atau "2500m")
 # Pod ini akan dipakai untuk KEDUA kondisi (none dan static) — yang membedakan
 # hasil HANYA kebijakan cpuManagerPolicy di kubelet node, bukan manifest Pod.
 # Mengubah manifest Pod antar kondisi akan merusak validitas perbandingan.
@@ -43,6 +43,13 @@ spec:
           readOnly: true
         - name: instances-tmpfs
           mountPath: /app/instances
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "32Mi"
+        limits:
+          cpu: "10m"
+          memory: "32Mi"
   containers:
     - name: solver
       image: crossover-experiment/gurobi-solver:latest
