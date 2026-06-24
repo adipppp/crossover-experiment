@@ -53,5 +53,6 @@ crossover-experiment/
 ## Yang Perlu Anda Lakukan Manual
 
 - [ ] Generate Academic WLS license di Gurobi User Portal.
+- [ ] Install `bzip2` dan kompilasi `emps.c` (lihat SETUP_GUIDE.md).
 - [ ] Ubah nama/konfirmasi *instance* LP pada `download_benchmarks.sh`.
 - [ ] Pastikan Node berada di Kondisi A (`none`) sebelum menjalankan *baseline*.
