@@ -53,7 +53,7 @@ echo "================================================================"
 # kondisi yang diminta, supaya tidak salah jalankan (mis. lupa switch policy).
 # Catatan: jika cpuManagerPolicy TIDAK ditulis di config.yaml (kubeadm tidak
 # selalu menulisnya), kebijakan efektif adalah "none" (default Kubernetes).
-ACTUAL_POLICY=$(grep "cpuManagerPolicy:" /var/lib/kubelet/config.yaml 2>/dev/null | awk '{print $2}')
+ACTUAL_POLICY=$(sudo grep "cpuManagerPolicy:" /var/lib/kubelet/config.yaml 2>/dev/null | awk '{print $2}')
 ACTUAL_POLICY="${ACTUAL_POLICY:-none}"   # default Kubernetes jika field tidak hadir
 if [[ "$ACTUAL_POLICY" != "$CONDITION" ]]; then
   echo "FATAL: kebijakan CPU Manager node saat ini adalah '$ACTUAL_POLICY', bukan '$CONDITION'." >&2
