@@ -27,6 +27,13 @@ if [[ ! -x "$EMPS_BIN" ]]; then
   exit 1
 fi
 
+# Validasi bzip2 tersedia
+if ! command -v bzip2 &>/dev/null; then
+  echo "ERROR: bzip2 tidak ditemukan." >&2
+  echo "       Install terlebih dahulu, misalnya: sudo apt install bzip2" >&2
+  exit 1
+fi
+
 mkdir -p "$DEST_DIR"
 cd "$DEST_DIR"
 
@@ -36,15 +43,15 @@ echo ">>> Mengunduh instance Mittelmann LP benchmark..."
 # URL aktual dari plato.asu.edu (Hans Mittelmann LP test set)
 # File yang diunduh adalah netlib compressed MPS yang dibungkus bzip2.
 declare -A INSTANCE_URLS=(
-  ["neos3.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/neos3.bz2"
-  ["L1_sixm1000obs.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/L1_sixm1000obs.bz2"
-  ["Linf_520c.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/Linf_520c.bz2"
-  ["cont1.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont1.bz2"
-  ["cont11.mps.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont11.bz2"
+  ["neos3.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/neos3.bz2"
+  ["L1_sixm1000obs.bz2"]="https://plato.asu.edu/ftp/lptestset/L1_sixm1000obs.bz2"
+  ["Linf_520c.bz2"]="https://plato.asu.edu/ftp/lptestset/Linf_520c.bz2"
+  ["cont1.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont1.bz2"
+  ["cont11.bz2"]="https://plato.asu.edu/ftp/lptestset/misc/cont11.bz2"
 )
 
 for archive in "${!INSTANCE_URLS[@]}"; do
-  mps_file="${archive%.bz2}"   # e.g. neos3.mps
+  mps_file="${archive%.bz2}.mps"   # e.g. neos3.mps
   url="${INSTANCE_URLS[$archive]}"
 
   if [[ -f "$mps_file" ]]; then
@@ -73,7 +80,7 @@ done
 
 echo ">>> Verifikasi integritas file (.mps):"
 for archive in "${!INSTANCE_URLS[@]}"; do
-  mps_file="${archive%.bz2}"
+  mps_file="${archive%.bz2}.mps"
   if [[ -f "$mps_file" ]]; then
     size=$(stat -c%s "$mps_file")
     # Cek minimal: file harus diawali dengan "NAME" (header MPS standar)
