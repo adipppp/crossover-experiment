@@ -399,7 +399,7 @@ Pastikan Anda memiliki `bzip2` dan telah mengkompilasi *utility* `emps` yang dig
 sudo apt update && sudo apt install -y bzip2
 
 # Kompilasi emps dari source
-gcc -O2 -m64 -o /usr/local/bin/emps emps.c
+sudo gcc -O2 -m64 -o /usr/local/bin/emps emps.c
 
 # Jika tidak punya akses root, Anda bisa mengkompilasi di direktori lokal
 # dan menjalankan skrip dengan variabel environment EMPS_BIN:
