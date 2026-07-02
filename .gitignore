@@ -2,3 +2,8 @@
 local/
 models/
 .DS_Store
+error.log
+files.zip
+infra/*.json
+kubelet-configs/rendered/*.yaml
+kubelet-configs/rendered/*.json
