@@ -1,3 +1,11 @@
+# Template — JANGAN salin file ini langsung ke /var/lib/kubelet/config.yaml.
+# Jalankan scripts/render_kubelet_configs.py (§1.7.5) terlebih dahulu.
+# Hasil render tersimpan di kubelet-configs/rendered/condition-A-none.yaml.
+#
+# Placeholder yang diisi oleh render_kubelet_configs.py:
+#   __RESERVED_SYSTEM_CPUS__ : ID vCPU tunggal yang direservasi untuk daemon
+#                              sistem dan Kubernetes (ditentukan berdasarkan
+#                              topologi aktual VM — lihat infra/topology-report.json).
 apiVersion: kubelet.config.k8s.io/v1beta1
 authentication:
   anonymous:
@@ -54,3 +62,4 @@ systemReserved:
 kubeReserved:
   cpu: "500m"
   memory: "512Mi"
+reservedSystemCPUs: "__RESERVED_SYSTEM_CPUS__"

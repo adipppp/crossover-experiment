@@ -1,3 +1,20 @@
+# Template — JANGAN salin file ini langsung ke /var/lib/kubelet/config.yaml.
+# Jalankan scripts/render_kubelet_configs.py (§1.7.5) terlebih dahulu.
+# Hasil render tersimpan di kubelet-configs/rendered/condition-B-static.yaml.
+#
+# Placeholder yang diisi oleh render_kubelet_configs.py:
+#   __RESERVED_SYSTEM_CPUS__ : ID vCPU tunggal yang direservasi untuk daemon
+#                              sistem dan Kubernetes (ditentukan berdasarkan
+#                              topologi aktual VM — lihat infra/topology-report.json).
+#
+# Catatan desain — cpuManagerPolicyOptions:
+#   Opsi full-pcpus-only=true SENGAJA tidak disertakan sebagai konfigurasi
+#   utama (sesuai Subbab "Karakterisasi Topologi Hardware" dalam proposal).
+#   Pemilihan core manual via reservedSystemCPUs (dari characterize_topology.py)
+#   sudah cukup untuk menghindari sibling pair. full-pcpus-only=true juga
+#   menjadi tidak relevan pada Option 2 (SMT off) karena sibling pair tidak ada.
+#   Jika di kemudian hari full-pcpus-only=true ingin diaktifkan sebagai
+#   sensitivitas tambahan, tambahkan secara eksplisit setelah render.
 apiVersion: kubelet.config.k8s.io/v1beta1
 authentication:
   anonymous:
@@ -19,8 +36,6 @@ clusterDomain: cluster.local
 containerRuntimeEndpoint: unix:///var/run/containerd/containerd.sock
 cpuManagerReconcilePeriod: 10s
 cpuManagerPolicy: static
-cpuManagerPolicyOptions:
-  full-pcpus-only: "true"
 crashLoopBackOff: {}
 evictionPressureTransitionPeriod: 0s
 fileCheckFrequency: 20s
@@ -56,3 +71,4 @@ systemReserved:
 kubeReserved:
   cpu: "500m"
   memory: "512Mi"
+reservedSystemCPUs: "__RESERVED_SYSTEM_CPUS__"
