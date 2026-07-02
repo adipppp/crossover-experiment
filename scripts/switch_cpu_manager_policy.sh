@@ -12,7 +12,7 @@ if [[ "$POLICY" != "none" && "$POLICY" != "static" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_SRC="$SCRIPT_DIR/../kubelet-configs/condition-$([ "$POLICY" == "none" ] && echo "A-none" || echo "B-static").yaml"
+CONFIG_SRC="$SCRIPT_DIR/../kubelet-configs/rendered/condition-$([ "$POLICY" == "none" ] && echo "A-none" || echo "B-static").yaml"
 KUBELET_CONFIG_DEST="/var/lib/kubelet/config.yaml"
 STATE_FILE="/var/lib/kubelet/cpu_manager_state"
 NODE_NAME="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || hostname | tr '[:upper:]' '[:lower:]')"
@@ -22,6 +22,8 @@ echo ">>> Sumber config: $CONFIG_SRC"
 
 if [[ ! -f "$CONFIG_SRC" ]]; then
   echo "FATAL: file config sumber tidak ditemukan: $CONFIG_SRC" >&2
+  echo "       Jalankan render_kubelet_configs.py terlebih dahulu (§1.7.5):" >&2
+  echo "         python3 ~/crossover-experiment/scripts/render_kubelet_configs.py" >&2
   exit 1
 fi
 

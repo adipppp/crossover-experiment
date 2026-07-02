@@ -7,19 +7,33 @@
 # paralel berisiko gagal checkout lisensi di tengah eksperimen.
 #
 # Penggunaan:
-#   ./run_experiment.sh <none|static> <jumlah_repetisi> <cpu_count>
-# Contoh (N=15 sesuai Metode Penelitian — lihat justifikasi jumlah repetisi di sana):
-#   ./run_experiment.sh none 15 2
-#   ./run_experiment.sh static 15 2
+#   ./run_experiment.sh <none|static> <jumlah_repetisi> <cpu_count> [blok]
+# Contoh (N=15, Blok 1 — lihat justifikasi jumlah repetisi di Metode Penelitian):
+#   ./run_experiment.sh none 15 4 1
+#   ./run_experiment.sh static 15 4 1
+# Contoh (N=15, Blok 2 — hari berbeda, urutan terbalik via run_full_experiment.sh):
+#   ./run_experiment.sh static 15 4 2
+#   ./run_experiment.sh none 15 4 2
+#
+# cpu_count=4 sesuai proposal: resources.requests.cpu = resources.limits.cpu = 4
+# (Guaranteed QoS) dan Threads=4 pada solver Gurobi.
+# blok default=1. Dipropagasi ke run_id (misal: none-neos3-blk1-run01) agar
+# Blok 2 tidak menimpa hasil Blok 1 via mekanisme skip-if-exists.
 
 set -euo pipefail
 
 CONDITION="${1:-}"
 N_REPS="${2:-15}"
-CPU_COUNT="${3:-2}"
+CPU_COUNT="${3:-4}"
+BLOCK="${4:-1}"
 
 if [[ "$CONDITION" != "none" && "$CONDITION" != "static" ]]; then
-  echo "Penggunaan: $0 <none|static> <jumlah_repetisi> <cpu_count>" >&2
+  echo "Penggunaan: $0 <none|static> <jumlah_repetisi> <cpu_count> [blok]" >&2
+  exit 1
+fi
+
+if ! [[ "$BLOCK" =~ ^[0-9]+$ ]] || (( BLOCK < 1 )); then
+  echo "FATAL: blok harus bilangan bulat >= 1 (dapat: $BLOCK)" >&2
   exit 1
 fi
 
@@ -45,7 +59,7 @@ INSTANCES=(
 )
 
 echo "================================================================"
-echo " EKSPERIMEN: kondisi=$CONDITION | repetisi=$N_REPS | cpu=$CPU_COUNT"
+echo " EKSPERIMEN: kondisi=$CONDITION | blok=$BLOCK | repetisi=$N_REPS | cpu=$CPU_COUNT"
 echo " Instance: ${INSTANCES[*]}"
 echo "================================================================"
 
@@ -87,7 +101,7 @@ for instance in "${INSTANCES[@]}"; do
 
   for rep in $(seq -w 1 "$N_REPS"); do
     # Gunakan sanitized_basename di run_id agar Pod memenuhi standar RFC 1123
-    run_id="${CONDITION}-${sanitized_basename}-run${rep}"
+    run_id="${CONDITION}-${sanitized_basename}-blk${BLOCK}-run${rep}"
     pod_name="solver-${run_id}"
 
     echo ""
