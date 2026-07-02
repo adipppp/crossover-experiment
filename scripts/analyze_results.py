@@ -12,6 +12,8 @@ Penggunaan:
 
 import argparse
 import json
+import math
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +43,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         ctxt_delta_whole_process = None
         throttled_usec_delta = None
         cache_miss_rate = None
+        ipc = None
         if sysmetrics_path.exists():
             try:
                 sysmetrics = json.loads(sysmetrics_path.read_text())
@@ -48,13 +51,21 @@ def load_results(results_dir: Path) -> pd.DataFrame:
                 ctxt_delta_whole_process = sysmetrics.get("involuntary_ctxt_switches_delta_whole_process")
                 throttled_usec_delta = sysmetrics.get("throttled_usec_delta")
                 cache_miss_rate = sysmetrics.get("cache_miss_rate")
+                ipc = sysmetrics.get("ipc")
             except json.JSONDecodeError:
                 print(f"PERINGATAN: gagal parse {sysmetrics_path}, metrik sistem run ini diabaikan.")
 
         wall_clock = data.get("wall_clock_total_seconds_DO_NOT_USE_FOR_PHASE_ANALYSIS") or data.get("wall_clock_total_seconds")
 
+        # Parse nomor blok dari run_id (format: condition-instance-blkN-runXX).
+        # Run lama (sebelum Phase 4) tidak mengandung 'blk' — default ke blok 1.
+        run_id_str = data.get("run_id", "")
+        blk_match = re.search(r"-blk(\d+)-run", run_id_str)
+        block = int(blk_match.group(1)) if blk_match else 1
+
         rows.append({
-            "run_id": data.get("run_id"),
+            "run_id": run_id_str,
+            "block": block,
             "condition": data.get("condition"),
             "instance": data.get("instance"),
             "status_code": data.get("status_code"),
@@ -69,6 +80,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "involuntary_ctxt_switches_delta_whole_process": ctxt_delta_whole_process,
             "throttled_usec_delta": throttled_usec_delta,
             "cache_miss_rate": cache_miss_rate,
+            "ipc": ipc,
             "discrepancy_warning": data.get("phase_timing_discrepancy_warning"),
             "error": data.get("error"),
         })
@@ -78,13 +90,23 @@ def load_results(results_dir: Path) -> pd.DataFrame:
 
 def separate_flagged_runs(df: pd.DataFrame):
     """
-    Filter dimatikan. Data dari Callback GRB.RUNTIME terbukti akurat. 
-    Selisih dengan log murni disebabkan oleh file appending dan uncrush-delay.
-    Semua data diikutkan ke dalam analisis utama.
+    Pisahkan run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
+    Run ini dikeluarkan dari analisis SENSITIVITY saja (lihat
+    run_throttling_sensitivity_check di bawah), BUKAN dari analisis utama RM1.
+    Analisis utama tetap memakai seluruh data.
+
+    Sesuai proposal Subbab "Analisis Data" RM1:
+    "Apabila kedua hasil konsisten, throttling dapat disingkirkan sebagai
+    confounding factor utama bagi RM1."
     """
-    clean = df.copy()
-    # Buat dataframe kosong agar tidak ada run yang terbuang
-    flagged = df.iloc[0:0].copy() 
+    # Run yang di-flag: Kondisi A dengan throttled_usec_delta > 0
+    throttled_mask = (
+        (df["condition"] == "none") &
+        (df["throttled_usec_delta"].notna()) &
+        (df["throttled_usec_delta"] > 0)
+    )
+    flagged = df[throttled_mask].copy()
+    clean   = df.copy()  # analisis utama tetap pakai semua data
     return clean, flagged
 
 
@@ -103,6 +125,28 @@ def summarize(df: pd.DataFrame):
     print(summary.to_string())
     print()
     return summary
+
+
+def compute_mde_rank_biserial(n1: int, n2: int, alpha: float,
+                              power: float = 0.80) -> float:
+    """
+    Estimasi minimum detectable effect size (rank-biserial r) untuk uji
+    Mann-Whitney U dua sisi menggunakan aproksimasi normal.
+
+    Rumus: r_MDE = (z_{alpha/2} + z_{power}) * SE(r)
+    SE(r) = sqrt((n1+n2+1) / (3*n1*n2))
+
+    Sesuai proposal Subbab "Prosedur Pengukuran":
+    "Estimasi minimum detectable effect akan dilaporkan secara post hoc
+    bersamaan dengan hasil pengujian RM1."
+    Fungsi ini dipanggil per instance dengan n=N aktual setelah eksklusi
+    run gagal, bukan dengan n=30 yang diasumsikan sebelum data terkumpul.
+    """
+    from scipy.stats import norm
+    se_r   = math.sqrt((n1 + n2 + 1) / (3 * n1 * n2))
+    z_crit = norm.ppf(1 - alpha / 2)
+    z_pow  = norm.ppf(power)
+    return (z_crit + z_pow) * se_r
 
 
 def run_mann_whitney_with_bonferroni(df: pd.DataFrame) -> dict:
@@ -152,12 +196,28 @@ def run_mann_whitney_with_bonferroni(df: pd.DataFrame) -> dict:
             f"reduksi={pct_reduction:.1f}%"
         )
 
+        mde_r = compute_mde_rank_biserial(
+            len(group_none), len(group_static), alpha_corrected
+        )
+        rank_biserial = (2 * u_stat) / (len(group_none) * len(group_static)) - 1
+        mde_label = (
+            f"terdeteksi (|r|={abs(rank_biserial):.3f} >= MDE={mde_r:.3f})"
+            if abs(rank_biserial) >= mde_r else
+            f"di bawah MDE (|r|={abs(rank_biserial):.3f} < MDE={mde_r:.3f})"
+        )
+        print(
+            f"      MDE @ 80% power, alpha={alpha_corrected:.5f}: r_min={mde_r:.3f} | "
+            f"efek aktual {mde_label}"
+        )
+
         mw_results[instance] = {
             "u_stat": u_stat,
             "p_raw": p_value,
             "n_none": len(group_none),
             "n_static": len(group_static),
             "pct_reduction": pct_reduction,
+            "rank_biserial": rank_biserial,
+            "mde_rank_biserial": mde_r,
         }
     print()
     return mw_results
@@ -203,10 +263,31 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
             )
             print(f"  [Cache Miss Rate] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_cache)}")
 
+        # 3. IPC Correlation (proksi efisiensi eksekusi per siklus — sesuai proposal RQ2)
+        # IPC yang lebih rendah pada kondisi none mengindikasikan lebih banyak stall
+        # memori akibat cache miss; IPC yang lebih tinggi pada static mengindikasikan
+        # perbaikan efisiensi eksekusi (bukan hanya konsistensi alokasi waktu CPU).
+        clean_ipc = subset.dropna(subset=["ipc", "crossover_seconds"])
+        if len(clean_ipc) < 4:
+            print(f"  [IPC]            Data tidak cukup untuk korelasi (n={len(clean_ipc)}).")
+        elif "ipc" not in subset.columns or clean_ipc["ipc"].nunique() <= 1:
+            print(f"  [IPC]            Varians nol atau kolom tidak tersedia (PMU mungkin NO-GO).")
+        else:
+            rho, p_value = stats.spearmanr(
+                clean_ipc["ipc"], clean_ipc["crossover_seconds"]
+            )
+            # Ekspektasi: rho NEGATIF (IPC tinggi -> crossover cepat)
+            direction = "negatif (sesuai ekspektasi)" if rho < 0 else "positif (periksa!)"
+            print(f"  [IPC]            Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ipc)} [{direction}]")
+
     print(
-        "\n  Interpretasi: rho positif & signifikan DI DALAM kondisi yang sama -> gangguan\n"
-        "  penjadwalan atau miss cache yang lebih tinggi berasosiasi dengan crossover time\n"
-        "  yang lebih lambat. Membandingkan antar kondisi (none vs static) diuji lewat Mann-Whitney U."
+        "\n  Interpretasi: rho positif & signifikan untuk context-switch/cache-miss"
+        " DI DALAM kondisi yang sama -> gangguan penjadwalan atau miss cache lebih"
+        " tinggi berasosiasi dengan crossover time lebih lambat.\n"
+        "  rho negatif untuk IPC -> IPC lebih tinggi berasosiasi dengan crossover"
+        " time lebih cepat.\n"
+        "  Ketiga proksi yang konsisten arahnya memperkuat plausibilitas mekanisme"
+        " migrasi thread (bukan membuktikan kausalitas — lihat Keterbatasan Metodologis)."
     )
     print()
 
@@ -288,6 +369,144 @@ def run_effect_size_analysis(mw_results: dict, alpha_corrected: float):
     print()
 
 
+def check_order_effect(df: pd.DataFrame) -> bool:
+    """
+    Periksa apakah urutan blok (A→B vs B→A) berdampak signifikan pada
+    crossover time, untuk memvalidasi asumsi block counterbalancing.
+
+    Sesuai proposal Subbab "Prosedur Eksperimen":
+    Dua uji Mann-Whitney U terpisah pada data AGREGAT lintas instance:
+      Uji 1: Kondisi A Blok 1 vs Kondisi A Blok 2
+      Uji 2: Kondisi B Blok 1 vs Kondisi B Blok 2
+    alpha = 0.05 (tidak dikoreksi Bonferroni — ini sanity check, bukan uji utama).
+
+    Kembalikan True jika kedua uji tidak signifikan (data bisa digabung).
+    """
+    print("=" * 70)
+    print("PEMERIKSAAN EFEK URUTAN (ORDER-EFFECT CHECK)")
+    print("(Validasi block counterbalancing — Subbab 'Prosedur Eksperimen')")
+    print("=" * 70)
+
+    # Periksa apakah kedua blok tersedia
+    blocks_available = df["block"].unique().tolist()
+    if len(blocks_available) < 2 or not (1 in blocks_available and 2 in blocks_available):
+        print(f"  Blok tersedia: {blocks_available}")
+        print("  Blok 1 dan 2 belum keduanya tersedia — skip order-effect check.")
+        print("  (Jalankan run_full_experiment.sh block2 terlebih dahulu.)")
+        print()
+        return True  # Asumsikan tidak ada masalah; analisis tetap lanjut
+
+    both_non_sig = True
+    for condition in ["none", "static"]:
+        grp1 = df[(df["condition"] == condition) & (df["block"] == 1)]["crossover_seconds"].dropna()
+        grp2 = df[(df["condition"] == condition) & (df["block"] == 2)]["crossover_seconds"].dropna()
+
+        label_cond = "A (none)" if condition == "none" else "B (static)"
+        if len(grp1) < 3 or len(grp2) < 3:
+            print(f"  Kondisi {label_cond}: data tidak cukup (n_blk1={len(grp1)}, n_blk2={len(grp2)})")
+            continue
+
+        u_stat, p_val = stats.mannwhitneyu(grp1, grp2, alternative="two-sided")
+        sig = p_val < ALPHA
+        verdict = "SIGNIFIKAN ⚠" if sig else "tidak signifikan ✓"
+        print(
+            f"  Kondisi {label_cond}: Blok1 median={grp1.median():.4f}s, "
+            f"Blok2 median={grp2.median():.4f}s | "
+            f"U={u_stat:.1f}, p={p_val:.4f} [{verdict}]"
+        )
+        if sig:
+            both_non_sig = False
+
+    print()
+    if both_non_sig:
+        print("  ✓ KEPUTUSAN: Tidak ada efek urutan signifikan.")
+        print("    Median dari 30 repetisi gabungan (Blok 1 + Blok 2) digunakan")
+        print("    sebagai hasil utama pada RQ1–RQ4.")
+    else:
+        print("  ⚠  KEPUTUSAN: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
+        print("    Hasil per blok dilaporkan TERPISAH selain gabungan.")
+        print("    Pertimbangkan model mixed-effects (blok sebagai random effect)")
+        print("    untuk estimasi efek kondisi yang tidak bias oleh urutan.")
+        print("    (Analisis mixed-effects tidak diimplementasikan di skrip ini —")
+        print("     diklasifikasikan sebagai penelitian lanjutan per proposal.)")
+    print()
+    return both_non_sig
+
+
+def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
+                                     alpha_corrected: float):
+    """
+    Uji sensitivitas RM1: jalankan ulang Mann-Whitney U dengan mengekslusi
+    run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
+
+    Sesuai proposal Subbab "Analisis Data" RM1:
+    "Apabila kedua hasil konsisten, throttling dapat disingkirkan sebagai
+    confounding factor utama bagi RM1. Apabila tidak konsisten, perbedaan
+    ini dilaporkan secara eksplisit."
+    """
+    print("=" * 70)
+    print("UJI SENSITIVITAS THROTTLING (RQ1)")
+    print("(Memverifikasi throttling bukan confounding factor dominan)")
+    print("=" * 70)
+
+    # Identifikasi run ter-throttle
+    throttled_mask = (
+        (df_all["condition"] == "none") &
+        (df_all["throttled_usec_delta"].notna()) &
+        (df_all["throttled_usec_delta"] > 0)
+    )
+    n_throttled = throttled_mask.sum()
+    n_total_none = (df_all["condition"] == "none").sum()
+
+    print(f"  Run Kondisi A dengan throttled_usec_delta > 0: {n_throttled} / {n_total_none}")
+
+    if n_throttled == 0:
+        print("  Tidak ada run yang ter-throttle — sensitivity check tidak berlaku.")
+        print("  Throttling bukan faktor sama sekali pada dataset ini.")
+        print()
+        return
+
+    df_excl = df_all[~throttled_mask].copy()
+
+    # Re-run Mann-Whitney U pada data ter-filter (print singkat)
+    instances = df_all["instance"].unique()
+    consistent = True
+    print()
+    print(f"  {'Instance':<30} {'All (p_raw)':>14} {'Excl throttled (p_raw)':>24} {'Konsisten?':>12}")
+    print("  " + "─" * 82)
+    for instance in instances:
+        if instance not in mw_results_all:
+            continue
+        sub = df_excl[df_excl["instance"] == instance]
+        g_none   = sub[sub["condition"] == "none"]["crossover_seconds"].dropna()
+        g_static = sub[sub["condition"] == "static"]["crossover_seconds"].dropna()
+        if len(g_none) < 3 or len(g_static) < 3:
+            print(f"  {instance:<30} {'(data terlalu sedikit setelah eksklusi)':>52}")
+            continue
+
+        _, p_excl = stats.mannwhitneyu(g_none, g_static, alternative="two-sided")
+        p_all = mw_results_all[instance]["p_raw"]
+        sig_all  = p_all  < alpha_corrected
+        sig_excl = p_excl < alpha_corrected
+        ok = sig_all == sig_excl
+        if not ok:
+            consistent = False
+        print(
+            f"  {instance:<30} {p_all:>14.4f} {p_excl:>24.4f} "
+            f"{'✓' if ok else '⚠  BEDA':>12}"
+        )
+
+    print()
+    if consistent:
+        print("  ✓ KONSISTEN: Verdict signifikansi tidak berubah setelah eksklusi.")
+        print("    Throttling bukan confounding factor dominan untuk RQ1.")
+    else:
+        print("  ⚠  TIDAK KONSISTEN: Verdict berubah setelah eksklusi run ter-throttle.")
+        print("    Laporkan kedua hasil (semua data / setelah eksklusi) secara terpisah.")
+        print("    Periksa run ter-throttle secara manual sebelum interpretasi akhir.")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", required=True)
@@ -323,13 +542,26 @@ def main():
         print(flagged_df[["run_id", "discrepancy_warning"]].to_string(index=False))
         print()
 
-    summarize(df)
-    mw_results = run_mann_whitney_with_bonferroni(df)
-    check_barrier_stability(df)
-    run_correlation_analysis_per_condition(df)
-
     n_instances = df["instance"].nunique()
     alpha_corrected = ALPHA / n_instances if n_instances > 0 else ALPHA
+
+    # Pemeriksaan efek urutan (Phase 4 — block counterbalancing)
+    # Harus dijalankan SEBELUM analisis utama untuk menentukan apakah
+    # hasil 30 rep digabung atau dilaporkan per blok.
+    both_blocks_ok = check_order_effect(df)
+    if not both_blocks_ok:
+        print("  CATATAN: Analisis RQ1-RQ4 di bawah tetap menggunakan data GABUNGAN")
+        print("  (30 rep). Hasil per blok tersedia di combined_results.csv kolom 'block'.")
+        print()
+
+    summarize(df)
+    mw_results = run_mann_whitney_with_bonferroni(df)
+
+    # Uji sensitivitas throttling (Phase 5 — sesuai proposal RQ1)
+    run_throttling_sensitivity_check(df, mw_results, alpha_corrected)
+
+    check_barrier_stability(df)
+    run_correlation_analysis_per_condition(df)
     run_effect_size_analysis(mw_results, alpha_corrected)
 
     csv_out = results_dir / "combined_results.csv"

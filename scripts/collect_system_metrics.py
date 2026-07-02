@@ -345,6 +345,15 @@ def main():
     cache_references = perf_metrics.get("cache-references", 0)
     cache_miss_rate = (cache_misses / cache_references) if cache_references > 0 else None
 
+    # Calculate IPC (Instructions Per Cycle) — proksi efisiensi eksekusi per siklus.
+    # Digunakan bersama cache_miss_rate sebagai triangulasi mekanisme pada RQ2:
+    # IPC relatif tetap → CPU mendapat alokasi waktu lebih konsisten (tanpa stall memori);
+    # IPC meningkat pada static → efisiensi per siklus naik akibat berkurangnya cache miss.
+    # (Subbab "Prosedur Pengukuran" dan "Analisis Data" RQ2 dalam proposal.)
+    _instr  = perf_metrics.get("instructions")
+    _cycles = perf_metrics.get("cycles")
+    ipc = (_instr / _cycles) if (_instr and _cycles and _cycles > 0) else None
+
     result = {
         "pid_host": pid,
         "cgroup_path": str(cgroup_path),
@@ -372,6 +381,7 @@ def main():
         # Hardware performance counters (triangulasi proksi RQ2)
         "perf_metrics": perf_metrics,
         "cache_miss_rate": cache_miss_rate,
+        "ipc": ipc,
     }
 
     Path(args.output).write_text(json.dumps(result, indent=2))
