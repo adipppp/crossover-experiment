@@ -20,29 +20,73 @@ gcloud config set project <PROJECT_ID_ANDA>
 ### 1.2 Cek dan minta kuota CPU di region pilihan (PENTING — sering jadi penghambat)
 
 ```bash
-# Ganti REGION sesuai pilihan, mis. us-central1
-REGION="us-central1"
-
-gcloud compute regions describe "$REGION" \
-  --format="table(quotas.filter(metric='CPUS'))"
+# Ganti REGION dan PROJECT_ID sesuai konfigurasi Anda.
+# Skrip memeriksa kuota untuk c2-standard-8 (8 vCPU, Option 1/2) DAN
+# c2-standard-16 (16 vCPU, Option 3) sekaligus, sehingga eskalasi nanti
+# tidak menunggu approval kedua di tengah eksperimen.
+REGION="us-central1" PROJECT_ID="<PROJECT_ID_ANDA>" \
+  bash scripts/check_quota.sh
 
 ```
 
-Jika quota CPUS di region itu kurang dari **8**, ajukan kenaikan kuota lewat
-Console: **IAM & Admin > Quotas**, filter `CPUs`, region sesuai pilihan,
-request naik ke minimal 8.
+Skrip menampilkan ringkasan ketersediaan kuota dan — jika diperlukan —
+menawarkan untuk mengajukan `gcloud beta quotas preferences create` secara
+langsung (ketik `y` dan masukkan email). Approval biasanya memakan waktu
+menit hingga jam untuk kenaikan kecil pada akun trial.
 
-> Catatan: meskipun `--threads-per-core=1` membuat VM hanya melihat 4 vCPU
-> dari dalam guest OS, GCP selalu menghitung **kuota berdasarkan machine type
-> (8 vCPU untuk c2-standard-8)** — bukan jumlah thread yang terlihat guest.
+> **Catatan kuota Option 3:** GCP menghitung kuota berdasarkan jumlah vCPU
+> nominal machine type, bukan jumlah thread yang terlihat guest setelah SMT
+> dinonaktifkan. `c2-standard-8` selalu dihitung 8 vCPU; `c2-standard-16`
+> selalu dihitung 16 vCPU.
 
-Proses approval biasanya cepat (menit-jam) untuk kenaikan kecil pada akun trial.
+Tunggu konfirmasi approval dari `gcloud beta quotas preferences describe
+<preference-id>` sebelum melanjutkan ke §​1.3.
 
-### 1.3 Buat VM
+### 1.3 Buat VM (Default — Option 1, SMT Aktif)
+
+Ini adalah jalur default. SMT dibiarkan aktif sehingga VM memiliki **8 vCPU**
+(2 hardware thread per physical core). Karakterisasi topologi di §​1.7 akan
+menentukan pasangan sibling mana yang harus dihindari saat memilih core untuk
+solver, dan keputusan akhir selalu dikonfirmasi manual sebelum setup Kubernetes.
 
 ```bash
 ZONE="us-central1-a"   # sesuaikan dengan region yang quota-nya cukup
 
+gcloud compute instances create crossover-experiment-vm \
+  --zone="$ZONE" \
+  --machine-type="c2-standard-8" \
+  --min-cpu-platform="Intel Cascade Lake" \
+  --maintenance-policy=TERMINATE \
+  --no-restart-on-failure \
+  --image-family="ubuntu-2204-lts" \
+  --image-project="ubuntu-os-cloud" \
+  --boot-disk-size="50GB" \
+  --boot-disk-type="pd-ssd" \
+  --tags="crossover-experiment"
+
+```
+
+> **`--maintenance-policy=TERMINATE`** mencegah live migration host yang
+> tidak terdeteksi selama sesi pengujian, karena live migration dapat mengubah
+> pemetaan vCPU ke physical core dan mereset status cache/TLB secara diam-diam.
+> Jangan menambahkan `--threads-per-core=1` di sini kecuali hasil karakterisasi
+> topologi (§​1.7) menunjukkan Option 1 tidak layak dan Anda memilih Option 2.
+> `--threads-per-core` bersifat creation-time-only — tidak bisa diubah in-place;
+> jika diperlukan, VM harus dibuat ulang (lihat §​1.3.1 dan §​1.3.2 di bawah).
+
+### 1.3.1 Kontingensi Option 2 — SMT Dinonaktifkan (c2-standard-8)
+
+**Jalankan ini HANYA jika** karakterisasi topologi di §​1.7 menghasilkan
+`infra/topology-decision.txt` berisi `option2`. Hapus VM yang ada, lalu buat
+ulang dengan `--threads-per-core=1`:
+
+```bash
+ZONE="us-central1-a"
+
+# Hapus VM yang ada (pastikan tidak ada data eksperimen yang belum disalin)
+gcloud compute instances delete crossover-experiment-vm --zone="$ZONE" --quiet
+
+# Buat ulang dengan SMT dinonaktifkan
 gcloud compute instances create crossover-experiment-vm \
   --zone="$ZONE" \
   --machine-type="c2-standard-8" \
@@ -58,13 +102,43 @@ gcloud compute instances create crossover-experiment-vm \
 
 ```
 
-> **`--threads-per-core=1`** menonaktifkan SMT (Hyper-Threading) di level
-> hypervisor GCP — cara yang benar dan didukung resmi. Hasilnya: VM hanya
-> memiliki **4 vCPU** (1 thread per physical core) yang terlihat oleh guest OS.
-> Anda tetap ditagih untuk 8 vCPU penuh (`c2-standard-8`), tapi tiap vCPU
-> kini 1-to-1 dengan physical core — tidak ada SMT sharing antar-container.
-> Jangan gunakan `echo off > /sys/devices/system/cpu/smt/control` di dalam VM;
-> pada KVM GCP, interface sysfs tersebut read-only atau tidak fungsional.
+> Dengan `--threads-per-core=1`, VM hanya melihat **4 vCPU** (1 per physical
+> core). Jalankan ulang `characterize_topology.py` setelah VM baru aktif untuk
+> mengonfirmasi topologi, lalu lanjutkan setup dari §​1.7. GCP tetap menghitung
+> kuota sebagai 8 vCPU (berdasarkan machine type nominal, bukan thread guest).
+
+### 1.3.2 Kontingensi Option 3 — Eskalasi ke c2-standard-16
+
+**Jalankan ini HANYA jika** karakterisasi topologi di §​1.7 menghasilkan
+`infra/topology-decision.txt` berisi `option3`. Membutuhkan kuota 16 vCPU
+(pastikan `check_quota.sh` sudah melaporkan ketersediaan kuota ini, atau
+ajukan terlebih dahulu):
+
+```bash
+ZONE="us-central1-a"
+
+# Hapus VM yang ada
+gcloud compute instances delete crossover-experiment-vm --zone="$ZONE" --quiet
+
+# Buat ulang sebagai c2-standard-16
+gcloud compute instances create crossover-experiment-vm \
+  --zone="$ZONE" \
+  --machine-type="c2-standard-16" \
+  --min-cpu-platform="Intel Cascade Lake" \
+  --maintenance-policy=TERMINATE \
+  --no-restart-on-failure \
+  --image-family="ubuntu-2204-lts" \
+  --image-project="ubuntu-os-cloud" \
+  --boot-disk-size="50GB" \
+  --boot-disk-type="pd-ssd" \
+  --tags="crossover-experiment"
+
+```
+
+> `c2-standard-16` menyediakan 16 vCPU (8 physical core dengan SMT aktif).
+> 4 solver CPU dan 1 reserved CPU dapat dipilih dari 5 physical core berbeda
+> sepenuhnya — tidak ada kontaminasi sibling sama sekali. Jalankan ulang
+> `characterize_topology.py` setelah VM baru aktif, lanjutkan dari §​1.7.
 
 ### 1.4 Buka akses SSH (firewall) jika belum ada rule default
 
@@ -104,6 +178,88 @@ gcloud compute ssh crossover-experiment-vm --zone="$ZONE"
 
 **Semua langkah selanjutnya (Bagian 2 dst.) dijalankan DI DALAM VM ini.**
 
+### 1.7 Karakterisasi topologi dan validasi PMU (Phase 1 — DI DALAM VM)
+
+Langkah ini WAJIB dijalankan sebelum setup Kubernetes. Hasilnya menentukan
+konfigurasi kubelet yang akan dirender di akhir bagian ini (§​1.7.3).
+
+#### 1.7.1 Install prasyarat minimal
+
+```bash
+sudo apt-get update -q
+sudo apt-get install -y gcc numactl linux-tools-generic linux-tools-$(uname -r)
+
+```
+
+#### 1.7.2 Izinkan perf mengakses PMU
+
+Diperlukan agar `validate_pmu_fidelity.py` dan nantinya `collect_system_metrics.py`
+dapat membaca hardware performance counter:
+
+```bash
+echo 'kernel.perf_event_paranoid = -1' | sudo tee /etc/sysctl.d/99-perf.conf
+sudo sysctl -p /etc/sysctl.d/99-perf.conf
+
+# Verifikasi (harus return -1):
+sysctl kernel.perf_event_paranoid
+
+```
+
+#### 1.7.3 Jalankan karakterisasi topologi
+
+```bash
+cd ~/crossover-experiment
+python3 scripts/characterize_topology.py
+
+```
+
+Skrip mencetak ringkasan topologi, daftar sibling pair, analisis kelayakan
+ketiga opsi, dan rekomendasi. **Baca seluruh output.**
+
+⚠️ **HENTI MANUAL:** Setelah membaca output (dan berdiskusi dengan pembimbing
+jika perlu), tetapkan keputusan dengan menulis **salah satu** dari:
+
+```bash
+# Pilih SALAH SATU sesuai rekomendasi/keputusan Anda:
+echo "option1" > infra/topology-decision.txt   # SMT aktif, pilih core manual
+echo "option2" > infra/topology-decision.txt   # SMT off (butuh recreate VM — lihat §​1.3.1)
+echo "option3" > infra/topology-decision.txt   # c2-standard-16 (butuh recreate VM — lihat §​1.3.2)
+
+```
+
+Jika memilih Option 2 atau Option 3, hentikan proses ini, buat ulang VM sesuai
+§​1.3.1 atau §​1.3.2, SSH kembali, dan mulai lagi dari §​1.7.1.
+
+#### 1.7.4 Validasi fidelitas hardware performance counter (PMU)
+
+```bash
+python3 scripts/validate_pmu_fidelity.py
+
+```
+
+Skrip mengompilasi micro-benchmark, menjalankan dua pola akses memori yang
+kontras di bawah `perf stat`, dan mengevaluasi go/no-go. Hasilnya tersimpan
+di `infra/pmu-validation-report.json`.
+
+- **Verdict GO / DEGRADED:** lanjutkan ke §​1.7.5. Metrik PMU valid.
+- **Verdict NO-GO:** lanjutkan ke §​1.7.5. Hanya `involuntary context switches`
+  yang digunakan sebagai proksi dalam analisis utama; keterbatasan ini akan
+  didokumentasikan secara eksplisit di Subbab 'Keterbatasan Metodologis'.
+
+#### 1.7.5 Render konfigurasi kubelet
+
+Berdasarkan `infra/topology-decision.txt` yang sudah ditetapkan, render
+konfigurasi kubelet final (menambahkan `reservedSystemCPUs` dan menghapus
+`full-pcpus-only` yang tidak sesuai proposal):
+
+```bash
+python3 scripts/render_kubelet_configs.py
+
+```
+
+Hasil render tersimpan di `kubelet-configs/rendered/`. Konfigurasi ini yang
+akan disalin ke `/var/lib/kubelet/config.yaml` pada §​2.7.
+
 ---
 
 ## Bagian 2 — Setup Kubernetes single-node (kubeadm) — DI DALAM VM
@@ -129,16 +285,20 @@ sudo sed -i '/ swap / s/^/#/' /etc/fstab
 
 ```
 
-### 2.2.1 Verifikasi SMT sudah dinonaktifkan oleh GCP
+### 2.2.1 Verifikasi topologi CPU (ringkas)
 
-SMT sudah dinonaktifkan saat pembuatan VM via `--threads-per-core=1` (§1.3).
-Langkah ini hanya memverifikasi hasilnya — tidak ada perintah tambahan yang dibutuhkan.
+Karakterisasi topologi lengkap sudah dilakukan di §1.7.3 (`characterize_topology.py`)
+dan hasilnya tersimpan di `infra/topology-report.json`. Langkah ini hanya
+memverifikasi secara cepat bahwa VM yang aktif konsisten dengan laporan tersebut:
 
 ```bash
-# Harus menunjukkan 4 (bukan 8) — karena SMT off di level hypervisor
+# Jumlah vCPU yang terlihat harus sesuai opsi yang dipilih:
+#   Option 1 (c2-standard-8, SMT aktif)   → 8 vCPU
+#   Option 2 (c2-standard-8, SMT nonaktif) → 4 vCPU
+#   Option 3 (c2-standard-16, SMT aktif)   → 16 vCPU
 nproc
 
-# Verifikasi topologi: setiap 'Core(s) per socket' harus 1 thread
+# Konfirmasi threads-per-core sesuai opsi:
 lscpu | grep -E 'Thread|Core|Socket|CPU\(s\)'
 
 ```
@@ -240,8 +400,10 @@ sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 > Untuk single-node eksperimen ini, kita menyalin file konfigurasi Kubelet secara langsung ke `/var/lib/kubelet/config.yaml`. Karena tidak ada rencana melakukan upgrade cluster (`kubeadm upgrade`), cara langsung ini aman dan praktis.
 
 ```bash
-# Salin konfigurasi kubelet baseline (Condition A - none) ke folder kubelet:
-sudo cp ~/crossover-experiment/kubelet-configs/condition-A-none.yaml \
+# Gunakan konfigurasi yang sudah di-RENDER oleh render_kubelet_configs.py (§1.7.5),
+# bukan file mentah di kubelet-configs/. File rendered sudah berisi
+# reservedSystemCPUs yang tepat berdasarkan topologi aktual VM.
+sudo cp ~/crossover-experiment/kubelet-configs/rendered/condition-A-none.yaml \
   /var/lib/kubelet/config.yaml
 
 # Nyalakan ulang kubelet agar perubahan terbaca:
@@ -249,13 +411,18 @@ sudo systemctl restart kubelet
 
 # Verifikasi kubelet aktif dan setting terbaca:
 sudo systemctl is-active kubelet
-grep -E 'cpuManagerPolicy|systemReserved|kubeReserved|cpuManagerReconcilePeriod' \
+grep -E 'cpuManagerPolicy|systemReserved|kubeReserved|reservedSystemCPUs|cpuManagerReconcilePeriod' \
   /var/lib/kubelet/config.yaml
 
 ```
 
 > **Catatan urutan:** Lakukan ini SEBELUM §2.8 (install Flannel) agar node
 > sudah dalam konfigurasi eksperimen yang benar sejak awal.
+>
+> **Mengapa `rendered/`?** File di `kubelet-configs/` adalah template — belum
+> berisi nilai `reservedSystemCPUs` yang spesifik terhadap topologi VM ini.
+> `render_kubelet_configs.py` (§1.7.5) mengisi nilai tersebut berdasarkan
+> `infra/topology-report.json` dan menulis hasilnya ke `kubelet-configs/rendered/`.
 
 ### 2.8 Install CNI plugin (Flannel — sederhana, cukup untuk single-node)
 
@@ -295,29 +462,29 @@ sudo chmod 440 /etc/sudoers.d/crictl-nopasswd
 
 ```
 
-### 2.12 Izinkan `perf stat` di host (wajib untuk `collect_system_metrics.py`)
+### 2.12 Verifikasi akses `perf stat` di host
 
-`collect_system_metrics.py` menjalankan `sudo perf stat -p <pid>` dari host
-untuk mengukur cache misses container solver. Default Ubuntu 22.04 memblokir ini.
+`kernel.perf_event_paranoid = -1` sudah disetel di §1.7.2 dan persistensi
+lintas reboot sudah dikonfigurasi via `/etc/sysctl.d/99-perf.conf`. Langkah
+ini hanya memverifikasi nilai masih aktif setelah setup Kubernetes:
 
 ```bash
-# Aktifkan akses perf (permanen, bertahan setelah reboot):
-echo 'kernel.perf_event_paranoid = -1' | sudo tee /etc/sysctl.d/99-perf.conf
-sudo sysctl -p /etc/sysctl.d/99-perf.conf
-
-# Verifikasi (harus return -1):
+# Harus mengembalikan -1:
 sysctl kernel.perf_event_paranoid
 
-# Tes perf bisa berjalan (harus tidak error):
-sudo perf stat -e cache-misses sleep 0.1 2>&1 | grep -E 'cache-misses|not supported'
+# Tes perf bisa mengukur PID arbitrer dari host (cara yang sama dengan
+# collect_system_metrics.py — berbeda dari validate_pmu_fidelity.py yang
+# mengukur proses milik sendiri):
+sudo perf stat -e cache-misses,instructions,cycles -p $$ sleep 0.1 2>&1 | \
+  grep -E 'cache-misses|instructions|cycles|not supported'
 
 ```
 
-> ⚠️ Jika `perf stat` mengembalikan `<not supported>` (bukan nilai angka),
-> artinya hardware PMU tidak di-expose oleh hypervisor GCP untuk VM ini.
-> Dalam kasus itu, `collect_system_metrics.py` akan tetap berjalan tapi
-> field `perf_metrics` di output JSON akan kosong — metrik utama
-> (context switches) tetap terkumpul via `/proc/<pid>/status`.
+> ⚠️ Fidelitas PMU sudah divalidasi secara menyeluruh di §1.7.4
+> (`validate_pmu_fidelity.py`). Hasilnya tersimpan di
+> `infra/pmu-validation-report.json`. Jika verdict adalah NO-GO, field
+> `perf_metrics` di output `collect_system_metrics.py` akan dikosongkan
+> pada fase analisis — hanya `involuntary context switches` yang digunakan.
 
 ---
 
@@ -423,22 +590,37 @@ grep cpuManagerPolicy /var/lib/kubelet/config.yaml || echo "belum diset eksplisi
 
 ### 5.2 Verifikasi alokasi CPU dan jalankan smoke test
 
-Dengan `--threads-per-core=1`, VM melihat **4 vCPU**. Kubelet mereservasi
-`systemReserved=500m + kubeReserved=500m = 1 CPU`, sehingga:
-`Allocatable = 4 - 1 = 3 CPU`.
+Dengan c2-standard-8 dan SMT aktif (Option 1), VM melihat **8 vCPU**.
+Kubelet mereservasi 1 core via `reservedSystemCPUs` (dikonfigurasikan oleh
+`render_kubelet_configs.py` berdasarkan topologi aktual), sehingga:
 
-Namun, DaemonSet sistem (kube-proxy, CoreDNS, dll.) mengonsumsi sebagian CPU
-tersebut secara request. Solver harus meminta **2 CPU** agar muat dijadwalkan.
+```
+Total vCPU        : 8
+reservedSystemCPUs: 1  (core tunggal untuk daemon sistem & Kubernetes)
+systemReserved    : 500m CPU (cgroup weight, bukan core eksklusif)
+kubeReserved      : 500m CPU (cgroup weight, bukan core eksklusif)
+Allocatable CPU   : 8 - 1 = 7 CPU
+```
+
+Pod solver meminta **4 CPU** (`resources.requests.cpu = limits.cpu = 4`,
+Guaranteed QoS), menyisakan 3 CPU di shared pool untuk daemon sistem.
+
+> Jika Option 2 (SMT off, 4 vCPU) yang dipilih, Allocatable = 4 - 1 = 3 CPU,
+> dan Pod solver meminta 2 CPU (perlu revisi rencana alokasi resource).
+> Jika Option 3 (c2-standard-16, 16 vCPU), Allocatable = 16 - 1 = 15 CPU,
+> dan Pod solver tetap meminta 4 CPU (banyak headroom tersisa).
 
 ```bash
-# Verifikasi allocatable CPU node (harus 3)
+# Verifikasi allocatable CPU node
+# Option 1: harus 7 | Option 2: harus 3 | Option 3: harus 15
 kubectl get node -o jsonpath='{.items[0].status.allocatable.cpu}'
 
-# Verifikasi headroom yang tersedia untuk Pod baru
-kubectl describe node | grep -A5 "Allocated resources"
+# Verifikasi headroom dan reserved CPU
+kubectl describe node | grep -A8 "Allocated resources"
 
 chmod +x scripts/*.sh
-bash scripts/run_experiment.sh none 1 2
+# Smoke test: 1 repetisi, instance pertama, 4 vCPU (sesuai proposal)
+bash scripts/run_experiment.sh none 1 4
 
 ```
 
@@ -464,17 +646,28 @@ kubectl uncordon crossover-experiment-vm
 
 ## Bagian 6 — Eksperimen penuh
 
+Ini adalah Blok 1 (urutan A→B). Blok 2 (urutan B→A, hari terpisah) akan
+diimplementasikan sebagai bagian dari Phase 4 (block counterbalancing).
+Sementara itu, jalankan Blok 1 terlebih dahulu:
+
 ```bash
-# Kondisi A (baseline) — N=15, 2 vCPU
-bash scripts/run_experiment.sh none 15 2
+# Blok 1 — Urutan A→B
+
+# Kondisi A (baseline) — N=15, 4 vCPU sesuai proposal (requests=limits=4, Guaranteed QoS)
+bash scripts/run_experiment.sh none 15 4
 
 # Berpindah ke Kondisi B (perlakuan)
 bash scripts/switch_cpu_manager_policy.sh static
 
-# Kondisi B (perlakuan) — N=15, 2 vCPU
-bash scripts/run_experiment.sh static 15 2
+# Kondisi B (perlakuan) — N=15, 4 vCPU
+bash scripts/run_experiment.sh static 15 4
 
 ```
+
+> **Catatan block counterbalancing:** Blok 2 (B→A) dijalankan di hari yang
+> berbeda untuk mengontrol variabel perancu temporal. Orkestrasi dua-blok
+> penuh — termasuk uji efek urutan Mann-Whitney U antar blok — akan tersedia
+> setelah Phase 4 (run_full_experiment.sh) diimplementasikan.
 
 ## Bagian 7 — Analisis
 
