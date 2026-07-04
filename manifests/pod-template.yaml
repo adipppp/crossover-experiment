@@ -59,6 +59,9 @@ spec:
         - --run-id=__RUN_ID__
         - --output-dir=/app/results
         - --threads=__CPU_COUNT__
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1002
       env:
         - name: GRB_WLSACCESSID
           valueFrom:
