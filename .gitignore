@@ -7,3 +7,5 @@ files.zip
 infra/*.json
 kubelet-configs/rendered/*.yaml
 kubelet-configs/rendered/*.json
+infra/pmu_validation/pmu_bench
+infra/topology-decision.txt
