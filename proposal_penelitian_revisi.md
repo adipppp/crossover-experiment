@@ -128,7 +128,9 @@ Kelima instance ini mewakili dua keluarga problem yang berbeda strukturnya (fitt
 
 ### Isolasi I/O Storage
 
-Untuk mengeliminasi latensi I/O disk sebagai variabel perancu, seluruh file instance benchmark (`.mps`) dan direktori output hasil tidak dimuat dari `hostPath` yang menunjuk ke disk persisten, melainkan dari volume `emptyDir` bertipe `Memory` (tmpfs) yang dipasang pada Pod solver. Dengan mekanisme ini, baik pembacaan instance maupun penulisan hasil terjadi seluruhnya di RAM, sehingga thread solver tidak akan memasuki status *blocked* (*D state* pada Linux) akibat operasi I/O disk, yang jika tidak diisolasi dapat memicu *voluntary context switch* yang keliru diatribusikan sebagai efek penjadwalan CPU.
+Pada rancangan awal, seluruh file instance benchmark (`.mps`) dan direktori output direncanakan dimuat dari volume `emptyDir` bertipe `Memory` (tmpfs). Namun dalam implementasinya (sebagai catatan Keterbatasan Metodologis), pendekatan ini diubah menjadi `hostPath` langsung ke disk persisten (`pd-ssd`). Hal ini dikarenakan ukuran file instance yang sangat besar (terutama setelah dekompresi) memicu *OOMKilled* pada batas tmpfs 512Mi yang dialokasikan, dan menaikkan limit tmpfs berpotensi mengganggu *Guaranteed QoS memory limits* dari pod. 
+
+Meskipun demikian, validitas eksperimen tetap terjaga dengan kuat. Proses pembacaan file instance (`gp.read()`) selesai sepenuhnya *sebelum* fungsi `model.optimize()` dipanggil. Dengan demikian, disk I/O dari pemuatan model tidak *overlap* (tumpang tindih) dengan fase iterasi barrier maupun crossover yang waktunya diukur secara ketat melalui callback. Penulisan file log ke disk bersifat kecil, berurutan, dan ter-*buffer* oleh kernel. Selain itu, fitur *kernel page cache* memastikan bahwa setelah pembacaan awal, file instance secara efektif dilayani dari RAM untuk pengulangan berikutnya. Oleh karena itu, thread solver tidak akan tersendat (*blocked*) oleh I/O disk persisten selama fase kritis berlangsung.
 
 ### Prosedur Eksperimen
 

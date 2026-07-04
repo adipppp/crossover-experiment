@@ -13,11 +13,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DIR="/mnt/experiment-data/instances"
-# Path ke binary emps hasil kompilasi emps.c.
-# Default: /usr/local/bin/emps — override via env var jika emps ada di lokasi lain.
-# Contoh: EMPS_BIN=~/crossover-experiment/emps bash scripts/download_benchmarks.sh
-EMPS_BIN="${EMPS_BIN:-/usr/local/bin/emps}"
+EMPS_BIN="${EMPS_BIN:-$SCRIPT_DIR/../emps}"
 
 # Validasi emps tersedia
 if [[ ! -x "$EMPS_BIN" ]]; then
