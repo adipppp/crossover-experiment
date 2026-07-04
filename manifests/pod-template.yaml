@@ -52,13 +52,18 @@ spec:
       image: crossover-experiment/gurobi-solver:latest
       imagePullPolicy: IfNotPresent
       command:
-        - python
-        - /app/run_solver.py
-        - --instance=/app/instances/__INSTANCE_FILE__
-        - --condition=__CONDITION__
-        - --run-id=__RUN_ID__
-        - --output-dir=/app/results
-        - --threads=__CPU_COUNT__
+        - sh
+        - -c
+        - |
+          python /app/run_solver.py \
+            --instance=/app/instances/__INSTANCE_FILE__ \
+            --condition=__CONDITION__ \
+            --run-id=__RUN_ID__ \
+            --output-dir=/app/results \
+            --threads=__CPU_COUNT__
+          EXIT_CODE=$?
+          cp -a /app/results/. /mnt/host-results/ || true
+          exit $EXIT_CODE
       env:
         - name: GRB_WLSACCESSID
           valueFrom:
@@ -87,6 +92,8 @@ spec:
           mountPath: /app/instances
         - name: results-tmpfs
           mountPath: /app/results
+        - name: results-host
+          mountPath: /mnt/host-results
   volumes:
     - name: host-instances
       hostPath:
@@ -100,3 +107,7 @@ spec:
       emptyDir:
         medium: Memory
         sizeLimit: "512Mi"
+    - name: results-host
+      hostPath:
+        path: /mnt/experiment-data/results
+        type: DirectoryOrCreate

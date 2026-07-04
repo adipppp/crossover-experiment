@@ -185,30 +185,17 @@ for instance in "${INSTANCES[@]}"; do
         ELAPSED=$((ELAPSED + 5))
     done
 
-    # Ambil hasil JSON dari tmpfs Pod menggunakan kubectl cp sebelum Pod dihapus
-    echo ">>> Mengambil file hasil JSON dari tmpfs Pod..."
+    echo ">>> Memeriksa keberadaan file hasil JSON di host..."
     RUN_SUCCESS=false
-    if kubectl cp "$NAMESPACE/$pod_name:/app/results/${run_id}.json" "$RESULTS_DIR/${run_id}.json" 2> "$RESULTS_DIR/${run_id}.cp_err.log"; then
-      touch "$RESULTS_DIR/${run_id}.cp_done"
+    if [[ -f "$RESULTS_DIR/${run_id}.json" ]]; then
+      echo ">>> [OK] File hasil JSON ditemukan di $RESULTS_DIR."
       RUN_SUCCESS=true
     else
-      echo "PERINGATAN: Gagal menyalin file hasil JSON menggunakan kubectl cp. Mencoba metode fallback (kubectl exec -- cat)..." >&2
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -- cat "/app/results/${run_id}.json" > "$RESULTS_DIR/${run_id}.json" 2> "$RESULTS_DIR/${run_id}.cat_err.log"; then
-        echo ">>> [OK] Berhasil menyalin file hasil JSON menggunakan metode fallback."
-        touch "$RESULTS_DIR/${run_id}.cp_done"
-        rm -f "$RESULTS_DIR/${run_id}.cp_err.log"
-        rm -f "$RESULTS_DIR/${run_id}.cat_err.log"
-        RUN_SUCCESS=true
-      else
-        echo "PERINGATAN: Metode fallback juga gagal. File hasil JSON tidak ditemukan atau rusak." >&2
-      fi
+      echo "PERINGATAN: File hasil JSON tidak ditemukan di host. Kemungkinan Pod gagal sebelum menyalin hasil." >&2
     fi
 
     # Tunggu proses monitoring background ikut selesai (PID sudah exit di dalamnya).
     wait "$METRICS_PID" || echo "PERINGATAN: collect_system_metrics.py keluar dengan error untuk $run_id"
-
-    # Bersihkan file sentinel
-    rm -f "$RESULTS_DIR/${run_id}.cp_done"
 
     echo ">>> Mengambil log dan hasil JSON dari Pod (sebelum dihapus)..."
     kubectl logs "$pod_name" -n "$NAMESPACE" > "$RESULTS_DIR/${run_id}.podlog.txt" 2>&1 || true

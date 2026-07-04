@@ -429,7 +429,7 @@ grep -E 'cpuManagerPolicy|systemReserved|kubeReserved|reservedSystemCPUs|cpuMana
 ```bash
 # Pin ke versi spesifik — JANGAN pakai /releases/latest karena mutable
 # Cek versi stable terbaru di: https://github.com/flannel-io/flannel/releases
-FLANNEL_VERSION="v0.28.0"
+FLANNEL_VERSION="v0.28.5"
 kubectl apply -f "https://github.com/flannel-io/flannel/releases/download/${FLANNEL_VERSION}/kube-flannel.yml"
 
 ```
