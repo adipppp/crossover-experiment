@@ -320,14 +320,13 @@ def main():
     snapshot_after_cpu = read_cgroup_cpu_stat(cgroup_path) if cgroup_path.exists() else {}
 
     # Penyelarasan ke fase crossover: baca file hasil JSON utama dari run_solver.py
-    # (sudah pasti tertulis di titik ini, karena ditulis SEBELUM proses exit, namun
-    # kita wajib menunggu kubectl cp menyalinnya ke Host filesystem).
+    # Karena sekarang hasil ditulis langsung ke hostPath (bukan kubectl cp),
+    # file json sudah pasti ada sesaat setelah proses exit. Tunggu sebentar saja
+    # jika file system butuh waktu sinkronisasi.
     solver_result_path = Path(args.results_dir) / f"{args.run_id}.json"
-    sentinel_path = solver_result_path.with_suffix(".cp_done")
     
-    # Tunggu sentinel hingga maksimal 15 detik (mengakomodasi delay I/O VM/k8s cp)
-    deadline = time.time() + 15.0
-    while not sentinel_path.exists() and time.time() < deadline:
+    deadline = time.time() + 5.0
+    while not solver_result_path.exists() and time.time() < deadline:
         time.sleep(0.05)
 
     crossover_phase_delta = align_samples_to_crossover_phase(samples, solver_result_path)
