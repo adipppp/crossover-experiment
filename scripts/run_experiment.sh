@@ -225,8 +225,8 @@ for instance in "${INSTANCES[@]}"; do
     fi
 
     # --- TAMBAHAN FIX LISENSI ---
-    echo ">>> Menunggu 10 detik agar server Gurobi WLS merilis token lisensi..."
-    sleep 10
+    echo ">>> Menunggu 30 detik agar server Gurobi WLS merilis token lisensi..."
+    sleep 30
     # ----------------------------
 
     echo ">>> RUN $run_id selesai."
