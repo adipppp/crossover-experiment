@@ -277,22 +277,21 @@ def analyze_options(total_vcpus, threads_per_core, n_physical_cores,
     }
 
     # ── Option 3 ─────────────────────────────────────────────────────────────
-    # c2-standard-16: 16 vCPU, 8 physical core (SMT aktif)
-    # 4 solver + 1 reserved dari 8 core berbeda → tidak ada kontaminasi sibling
+    # c2-standard-16: 8 vCPU, 8 physical core (SMT dinonaktifkan)
+    # 4 solver + 1 reserved → 4 core fisik eksklusif tanpa SMT packing dari Kubernetes
     options["option3"] = {
         "viable": "requires_vm_recreation",
         "rationale": (
-            "c2-standard-16 menyediakan 16 vCPU (8 physical core dengan SMT aktif). "
-            f"4 solver CPU dan 1 reserved CPU dapat dipilih dari 5 physical core yang "
-            f"sepenuhnya berbeda — tidak ada kontaminasi sibling sama sekali. "
-            "Membutuhkan kuota 16 vCPU dan biaya lebih tinggi dari c2-standard-8. "
-            "VM harus dibuat ulang sebagai c2-standard-16."
+            "c2-standard-16 dengan --threads-per-core=1 mematikan SMT sehingga VM "
+            "hanya melihat 8 vCPU murni. Ini adalah satu-satunya cara memaksa Kubelet "
+            "memberikan 4 core fisik terisolasi tanpa SMT packing. Membutuhkan kuota "
+            "16 vCPU GCP. VM harus dibuat ulang."
         ),
         "target_machine_type":    "c2-standard-16",
-        "expected_vcpus":         16,
+        "expected_vcpus":         8,
         "expected_physical_cores": 8,
         "vm_recreation_required": True,
-        "gcloud_machine_type_flag": "--machine-type=c2-standard-16",
+        "gcloud_machine_type_flag": "--machine-type=c2-standard-16 --threads-per-core=1",
         "quota_required_vcpus":   16,
     }
 

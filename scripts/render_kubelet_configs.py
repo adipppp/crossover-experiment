@@ -34,7 +34,7 @@ VALID_DECISIONS    = ("option1", "option2", "option3")
 OPTION_VCPU_EXPECT = {
     "option1": {"threads_per_core": 2,  "total_vcpus": 8,  "machine_hint": "c2-standard-8, SMT aktif"},
     "option2": {"threads_per_core": 1,  "total_vcpus": 4,  "machine_hint": "c2-standard-8, SMT nonaktif"},
-    "option3": {"threads_per_core": 2,  "total_vcpus": 16, "machine_hint": "c2-standard-16, SMT aktif"},
+    "option3": {"threads_per_core": 1,  "total_vcpus": 8, "machine_hint": "c2-standard-16, SMT nonaktif"},
 }
 
 TEMPLATE_FILES = {

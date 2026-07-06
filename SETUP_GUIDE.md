@@ -609,12 +609,12 @@ Guaranteed QoS), menyisakan 3 CPU di shared pool untuk daemon sistem.
 
 > Jika Option 2 (SMT off, 4 vCPU) yang dipilih, Allocatable = 4 - 1 = 3 CPU,
 > dan Pod solver meminta 2 CPU (perlu revisi rencana alokasi resource).
-> Jika Option 3 (c2-standard-16, 16 vCPU), Allocatable = 16 - 1 = 15 CPU,
-> dan Pod solver tetap meminta 4 CPU (banyak headroom tersisa).
+> Jika Option 3 (c2-standard-16 dengan SMT off, 8 vCPU), Allocatable = 8 - 1 = 7 CPU,
+> dan Pod solver tetap meminta 4 CPU (sisa 3 core fisik di shared pool).
 
 ```bash
 # Verifikasi allocatable CPU node
-# Option 1: harus 7 | Option 2: harus 3 | Option 3: harus 15
+# Option 1: harus 7 | Option 2: harus 3 | Option 3: harus 7
 kubectl get node -o jsonpath='{.items[0].status.allocatable.cpu}'
 
 # Verifikasi headroom dan reserved CPU
