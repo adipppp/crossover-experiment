@@ -9,3 +9,6 @@ kubelet-configs/rendered/*.yaml
 kubelet-configs/rendered/*.json
 infra/pmu_validation/pmu_bench
 infra/topology-decision.txt
+results_c2_standard_8/
+report.txt
+report_full.txt

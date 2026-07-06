@@ -131,14 +131,16 @@ gcloud compute instances create crossover-experiment-vm \
   --image-project="ubuntu-os-cloud" \
   --boot-disk-size="50GB" \
   --boot-disk-type="pd-ssd" \
+  --threads-per-core=1 \
   --tags="crossover-experiment"
 
 ```
 
-> `c2-standard-16` menyediakan 16 vCPU (8 physical core dengan SMT aktif).
-> 4 solver CPU dan 1 reserved CPU dapat dipilih dari 5 physical core berbeda
-> sepenuhnya — tidak ada kontaminasi sibling sama sekali. Jalankan ulang
-> `characterize_topology.py` setelah VM baru aktif, lanjutkan dari §​1.7.
+> `c2-standard-16` dengan `--threads-per-core=1` mematikan SMT sehingga VM
+> hanya melihat 8 vCPU murni (1 thread per physical core). Ini adalah
+> SATU-SATUNYA cara memaksa Kubelet CPU Manager (yang punya tabiat selalu
+> mengutamakan "full physical cores") untuk memberikan 4 core fisik yang
+> benar-benar terisolasi kepada Gurobi tanpa ada SMT packing.
 
 ### 1.4 Buka akses SSH (firewall) jika belum ada rule default
 
