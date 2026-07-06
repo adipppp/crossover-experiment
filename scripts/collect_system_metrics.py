@@ -131,7 +131,7 @@ def read_proc_status_ctxt_switches(pid: int) -> dict:
                     total_voluntary += int(voluntary.group(1))
                 if nonvoluntary:
                     total_involuntary += int(nonvoluntary.group(1))
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 pass  # thread mungkin sudah exited di antara iterasi
                 
     return {
@@ -289,7 +289,7 @@ def main():
     try:
         snap = read_proc_status_ctxt_switches(pid)
         samples.append((time.time(), snap["involuntary_ctxt_switches"]))
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         pass
 
     t_start = time.time()
@@ -300,7 +300,7 @@ def main():
         try:
             snap = read_proc_status_ctxt_switches(pid)
             samples.append((time.time(), snap["involuntary_ctxt_switches"]))
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             break  # proses exit tepat di antara check exists() dan read
         time.sleep(args.poll_interval)
     t_end = time.time()
