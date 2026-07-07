@@ -37,6 +37,49 @@ if ! [[ "$BLOCK" =~ ^[0-9]+$ ]] || (( BLOCK < 1 )); then
   exit 1
 fi
 
+# ====================================================================
+# [WRAPPER] SELF-RE-EXECUTING AUTO-RESUME
+# ====================================================================
+if [[ "${_AUTO_RESUME:-0}" != "1" ]]; then
+    export _AUTO_RESUME=1
+    MAX_RETRIES=5
+    ATTEMPT=1
+    
+    if ! command -v jq &> /dev/null; then
+        echo "FATAL: 'jq' wajib di-install." >&2
+        exit 1
+    fi
+    
+    trap 'echo ">>> Interupsi (Ctrl+C). Membersihkan zombie..."; pkill -f "collect_system_metrics.py" || true; kubectl delete pods -l app=crossover-solver -n crossover-experiment --force --grace-period=0 2>/dev/null || true; exit 130' SIGINT SIGTERM
+
+    while (( ATTEMPT <= MAX_RETRIES )); do
+        kubectl delete pods -l app=crossover-solver -n crossover-experiment --force --grace-period=0 2>/dev/null || true
+        pkill -f "collect_system_metrics.py" || true
+
+        echo ">>> [AUTO-RESUME] Memulai eksekusi (Attempt $ATTEMPT/$MAX_RETRIES)..."
+        set +e
+        bash "$0" "$@"
+        EXIT_CODE=$?
+        set -e
+
+        if [[ $EXIT_CODE -eq 0 ]]; then
+            echo ">>> [AUTO-RESUME] Seluruh eksekusi sukses 100%!"
+            exit 0
+        else
+            if (( ATTEMPT == MAX_RETRIES )); then
+                echo "FATAL: Batas percobaan ($MAX_RETRIES x) tercapai. Eksperimen dihentikan."
+                exit 1
+            fi
+            echo ">>> [AUTO-RESUME] Ditemukan kegagalan (Exit: $EXIT_CODE). Menunggu 30s sebelum retry..."
+            sleep 30
+            ATTEMPT=$((ATTEMPT + 1))
+        fi
+    done
+    exit 1
+fi
+
+TOTAL_FAILURES=0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_TEMPLATE="$SCRIPT_DIR/../manifests/pod-template.yaml"
 INSTANCES_DIR="/mnt/experiment-data/instances"
@@ -110,8 +153,13 @@ for instance in "${INSTANCES[@]}"; do
     echo "---------------------------------------------------------------"
 
     if [[ -s "$RESULTS_DIR/${run_id}.sysmetrics.json" && -s "$RESULTS_DIR/${run_id}.podlog.txt" && -s "$RESULTS_DIR/${run_id}.json" ]]; then
-      echo ">>> RUN $run_id sudah memiliki hasil utuh. Melewati (skip)..."
-      continue
+      if jq -e . "$RESULTS_DIR/${run_id}.json" >/dev/null 2>&1 && jq -e . "$RESULTS_DIR/${run_id}.sysmetrics.json" >/dev/null 2>&1; then
+        echo ">>> RUN $run_id sudah memiliki hasil utuh dan valid. Melewati (skip)..."
+        continue
+      else
+        echo "PERINGATAN: Artefak corrupt untuk $run_id. Menghapus untuk retry..."
+        rm -f "$RESULTS_DIR/${run_id}".*
+      fi
     fi
 
     # Render manifest Pod dari template dengan placeholder substitution.
@@ -185,15 +233,6 @@ for instance in "${INSTANCES[@]}"; do
         ELAPSED=$((ELAPSED + 5))
     done
 
-    echo ">>> Memeriksa keberadaan file hasil JSON di host..."
-    RUN_SUCCESS=false
-    if [[ -f "$RESULTS_DIR/${run_id}.json" ]]; then
-      echo ">>> [OK] File hasil JSON ditemukan di $RESULTS_DIR."
-      RUN_SUCCESS=true
-    else
-      echo "PERINGATAN: File hasil JSON tidak ditemukan di host. Kemungkinan Pod gagal sebelum menyalin hasil." >&2
-    fi
-
     # Tunggu proses monitoring background ikut selesai (PID sudah exit di dalamnya).
     wait "$METRICS_PID" || echo "PERINGATAN: collect_system_metrics.py keluar dengan error untuk $run_id"
 
@@ -201,7 +240,10 @@ for instance in "${INSTANCES[@]}"; do
     kubectl logs "$pod_name" -n "$NAMESPACE" > "$RESULTS_DIR/${run_id}.podlog.txt" 2>&1 || true
 
     echo ">>> Menghapus Pod $pod_name (membersihkan sebelum run berikutnya)..."
-    kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=true --timeout=60s
+    if ! kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=true --timeout=60s 2>/dev/null; then
+       echo ">>> Memaksa penghapusan Pod yang stuck..."
+       kubectl delete pod "$pod_name" -n "$NAMESPACE" --force --grace-period=0 2>/dev/null || true
+    fi
 
     rm -f "$rendered_manifest"
 
@@ -211,11 +253,22 @@ for instance in "${INSTANCES[@]}"; do
     echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
     sleep 2
 
+    RUN_SUCCESS=false
+    if [[ -s "$RESULTS_DIR/${run_id}.json" && -s "$RESULTS_DIR/${run_id}.sysmetrics.json" && -s "$RESULTS_DIR/${run_id}.podlog.txt" ]]; then
+      if jq -e . "$RESULTS_DIR/${run_id}.json" >/dev/null 2>&1 && jq -e . "$RESULTS_DIR/${run_id}.sysmetrics.json" >/dev/null 2>&1; then
+        echo ">>> [OK] Seluruh artefak utuh dan tervalidasi."
+        RUN_SUCCESS=true
+      fi
+    fi
+
     # Hentikan jika kegagalan beruntun terjadi secara sistematis
     if [[ "$RUN_SUCCESS" == "true" ]]; then
       CONSECUTIVE_FAILURES=0
     else
+      TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
       CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+      echo "PERINGATAN: Artefak tidak lengkap/korup untuk $run_id. Menghapus jejak untuk retry..."
+      rm -f "$RESULTS_DIR/${run_id}".*
       echo "⚠️ Terdeteksi kegagalan run. Jumlah kegagalan beruntun: ${CONSECUTIVE_FAILURES}/3"
       if (( CONSECUTIVE_FAILURES >= 3 )); then
         echo "FATAL: Terjadi kegagalan eksperimen secara berturut-turut sebanyak 3 kali." >&2
@@ -238,3 +291,9 @@ echo "================================================================"
 echo " SELESAI: semua repetisi untuk kondisi=$CONDITION sudah dijalankan."
 echo " Hasil tersimpan di: $RESULTS_DIR"
 echo "================================================================"
+
+if (( TOTAL_FAILURES > 0 )); then
+  echo ">>> Terdapat $TOTAL_FAILURES kegagalan pada sesi ini. Meminta retry dari Parent..."
+  exit 2
+fi
+exit 0
