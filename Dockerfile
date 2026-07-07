@@ -4,10 +4,6 @@ FROM gurobi/python:11.0.3
 
 WORKDIR /app
 
-# Dependensi tambahan untuk pengukuran metrik sistem (context switches, dsb.)
-# psutil untuk membaca /proc dari dalam container saat dibutuhkan sebagai cross-check.
-RUN pip install --no-cache-dir psutil==6.0.0
-
 COPY scripts/run_solver.py /app/run_solver.py
 
 # Direktori untuk benchmark instance (di-mount via ConfigMap/PVC saat runtime)

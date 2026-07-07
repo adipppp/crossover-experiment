@@ -3,7 +3,7 @@
 # PENTING — syarat Guaranteed QoS (wajib untuk kebijakan CPU Manager `static`):
 #   1. requests.cpu HARUS SAMA dengan limits.cpu — untuk SEMUA container (termasuk init)
 #   2. requests.memory HARUS SAMA dengan limits.memory — untuk SEMUA container (termasuk init)
-#   3. Nilai CPU container solver HARUS INTEGER (mis. "2", bukan "2.5" atau "2500m")
+#   3. Nilai CPU container solver dan initContainer HARUS INTEGER (mis. "2", bukan "2.5" atau "2500m") jika ingin mendapat pinning di bawah `static`
 # Pod ini akan dipakai untuk KEDUA kondisi (none dan static) — yang membedakan
 # hasil HANYA kebijakan cpuManagerPolicy di kubelet node, bukan manifest Pod.
 # Mengubah manifest Pod antar kondisi akan merusak validitas perbandingan.
@@ -33,17 +33,17 @@ spec:
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
   initContainers:
     - name: stage-instance
-      image: alpine:latest
+      image: alpine:3.19
       command:
         - sh
         - -c
         - "cp /mnt/host-instances/__INSTANCE_FILE__ /app/instances/__INSTANCE_FILE__"
       resources:
         requests:
-          cpu: "__CPU_COUNT__"
+          cpu: "1"
           memory: "24Gi"
         limits:
-          cpu: "__CPU_COUNT__"
+          cpu: "1"
           memory: "24Gi"
       volumeMounts:
         - name: host-instances

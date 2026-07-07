@@ -337,9 +337,6 @@ def main():
 
     # Parse raw perf stats
     perf_metrics = parse_perf_stat(perf_log)
-    # Clean up the raw file
-    if perf_log.exists():
-        perf_log.unlink()
 
     # Calculate Cache Miss Rate
     cache_misses = perf_metrics.get("cache-misses", 0)
