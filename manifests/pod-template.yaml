@@ -11,12 +11,12 @@
 # Placeholder yang diisi otomatis oleh scripts/run_experiment.sh sebelum
 # `kubectl apply`: __RUN_ID__, __CONDITION__, __INSTANCE_FILE__, __CPU_COUNT__
 #
-# Catatan desain — mengapa tidak ada initContainer:
-#   File instance di-mount langsung dari host sebagai read-only. Tidak perlu
-#   disalin ke tmpfs karena run_solver.py hanya MEMBACA file (gp.read), tidak
-#   pernah memodifikasinya. Menyalin ke tmpfs berisiko OOMKill untuk instance
-#   berukuran besar (>400MB). Kernel page cache memastikan file tetap di RAM
-#   setelah pertama kali dibaca, sehingga kondisi I/O tetap setara antar run.
+# Catatan desain:
+#   File instance di-copy dari hostPath ke emptyDir (tmpfs) menggunakan initContainer
+#   sebelum solver berjalan. Ini menjamin I/O saat membaca file instance terjadi
+#   murni di RAM, menghilangkan voluntary context switches akibat disk read (sesuai
+#   proposal metodologi). Risikonya adalah OOM jika instance sangat besar, namun
+#   batas 24Gi sangat mencukupi untuk benchmark Mittelmann.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -31,6 +31,26 @@ spec:
   # Tidak ada nodeSelector/affinity karena ini cluster single-node;
   # di cluster multi-node, WAJIB ditambahkan nodeName/nodeSelector
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
+  initContainers:
+    - name: stage-instance
+      image: alpine:latest
+      command:
+        - sh
+        - -c
+        - "cp /mnt/host-instances/__INSTANCE_FILE__ /app/instances/__INSTANCE_FILE__"
+      resources:
+        requests:
+          cpu: "__CPU_COUNT__"
+          memory: "24Gi"
+        limits:
+          cpu: "__CPU_COUNT__"
+          memory: "24Gi"
+      volumeMounts:
+        - name: host-instances
+          mountPath: /mnt/host-instances
+          readOnly: true
+        - name: mem-instances
+          mountPath: /app/instances
   containers:
     - name: solver
       image: crossover-experiment/gurobi-solver:latest
@@ -70,7 +90,7 @@ spec:
           cpu: "__CPU_COUNT__"
           memory: "24Gi"
       volumeMounts:
-        - name: host-instances
+        - name: mem-instances
           mountPath: /app/instances
           readOnly: true
         - name: results-host
@@ -80,6 +100,9 @@ spec:
       hostPath:
         path: /mnt/experiment-data/instances
         type: Directory
+    - name: mem-instances
+      emptyDir:
+        medium: Memory
     - name: results-host
       hostPath:
         path: /mnt/experiment-data/results

@@ -229,10 +229,11 @@ def parse_perf_stat(log_path: Path) -> dict:
         line = line.strip()
         if not line:
             continue
-        match = re.search(r"^([\d,.]+)\s+([\w-]+)", line)
+        match = re.search(r"^([\d,.]+)\s+([a-zA-Z0-9_-]+(?::[a-zA-Z]+)?)", line)
         if match:
             val_str = match.group(1).replace(",", "")
             event = match.group(2)
+            event = re.sub(r":[a-zA-Z]+$", "", event)
             try:
                 if "." in val_str:
                     res[event] = float(val_str)
@@ -264,7 +265,7 @@ def main():
     # Launch background perf stat targeting the host process
     perf_log = Path(args.output).with_suffix(".perf.txt")
     perf_cmd = [
-        "sudo", "perf", "stat",
+        "sudo", "env", "LC_ALL=C", "perf", "stat",
         "-p", str(pid),
         "-e", "cache-misses,cache-references,L1-dcache-load-misses,L1-dcache-loads,instructions,cycles",
         "--", "sleep", "1800"
@@ -317,7 +318,8 @@ def main():
 
     # cgroup biasanya masih tersedia sesaat setelah proses exit (sebelum container
     # dihapus oleh kubelet), tapi ini RACE CONDITION — baca secepat mungkin.
-    snapshot_after_cpu = read_cgroup_cpu_stat(cgroup_path) if cgroup_path.exists() else {}
+    cgroup_exists_after = cgroup_path.exists()
+    snapshot_after_cpu = read_cgroup_cpu_stat(cgroup_path) if cgroup_exists_after else {}
 
     # Penyelarasan ke fase crossover: baca file hasil JSON utama dari run_solver.py
     # Karena sekarang hasil ditulis langsung ke hostPath (bukan kubectl cp),
@@ -377,6 +379,7 @@ def main():
             snapshot_after_cpu.get("throttled_usec", 0) - snapshot_before_cpu.get("throttled_usec", 0)
             if snapshot_after_cpu and snapshot_before_cpu else None
         ),
+        "missing_cgroup_snapshot": not cgroup_exists_after,
         # Hardware performance counters (triangulasi proksi RQ2)
         "perf_metrics": perf_metrics,
         "cache_miss_rate": cache_miss_rate,

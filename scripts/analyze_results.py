@@ -44,6 +44,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         throttled_usec_delta = None
         cache_miss_rate = None
         ipc = None
+        missing_cgroup_snapshot = None
         if sysmetrics_path.exists():
             try:
                 sysmetrics = json.loads(sysmetrics_path.read_text())
@@ -52,6 +53,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
                 throttled_usec_delta = sysmetrics.get("throttled_usec_delta")
                 cache_miss_rate = sysmetrics.get("cache_miss_rate")
                 ipc = sysmetrics.get("ipc")
+                missing_cgroup_snapshot = sysmetrics.get("missing_cgroup_snapshot")
             except json.JSONDecodeError:
                 print(f"PERINGATAN: gagal parse {sysmetrics_path}, metrik sistem run ini diabaikan.")
 
@@ -82,6 +84,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "cache_miss_rate": cache_miss_rate,
             "ipc": ipc,
             "discrepancy_warning": data.get("phase_timing_discrepancy_warning"),
+            "missing_cgroup_snapshot": missing_cgroup_snapshot,
             "error": data.get("error"),
         })
 
@@ -231,6 +234,9 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
     print("=" * 70)
     print("KORELASI (PER KONDISI): involuntary context switches & cache miss rate vs crossover time")
     print("(Menjawab Rumusan Masalah poin 2)")
+    print("CATATAN: Involuntary context switches di-scope KHUSUS pada fase crossover.")
+    print("         Metrik PMU (cache miss rate, IPC) adalah WHOLE-PROCESS karena")
+    print("         keterbatasan teknis perf stat dalam mem-scope eksekusi internal.")
     print("=" * 70)
 
     for condition in sorted(df["condition"].unique()):
@@ -289,6 +295,39 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
         "  Ketiga proksi yang konsisten arahnya memperkuat plausibilitas mekanisme"
         " migrasi thread (bukan membuktikan kausalitas — lihat Keterbatasan Metodologis)."
     )
+    print()
+
+
+def check_warming_trend(df: pd.DataFrame):
+    print("=" * 70)
+    print("TREND ANALYSIS UNTUK WARMING EFFECT")
+    print("(Pemeriksaan monotonisitas waktu crossover dalam satu blok)")
+    print("=" * 70)
+    
+    trend_found = False
+    for instance in df["instance"].unique():
+        for condition in ["none", "static"]:
+            for block in df["block"].unique():
+                subset = df[
+                    (df["instance"] == instance) &
+                    (df["condition"] == condition) &
+                    (df["block"] == block)
+                ].sort_values("run_id")
+                if len(subset) < 5:
+                    continue
+                rho, p = stats.spearmanr(
+                    range(len(subset)),
+                    subset["crossover_seconds"].values
+                )
+                if p < 0.05:
+                    print(f"  ⚠ Tren terdeteksi: {instance} / Kondisi {condition} / Blok {block} | "
+                          f"rho={rho:.3f} p={p:.3f}")
+                    trend_found = True
+                    
+    if not trend_found:
+        print("  ✓ KEPUTUSAN: Tidak ada tren monoton (warming effect) yang signifikan.")
+    else:
+        print("  CATATAN: Ada bukti residual warming effect. Laporkan di Keterbatasan.")
     print()
 
 
@@ -532,14 +571,19 @@ def main():
         print()
     df = df[df["status_code"] == 2]
 
-    # Pisahkan run yang punya discrepancy_warning — TIDAK ikut analisis utama
-    # sampai diperiksa manual (lihat docstring separate_flagged_runs).
+    # Pisahkan run Kondisi A yang mengalami CFS throttling (tidak dikeluarkan dari utama)
     df, flagged_df = separate_flagged_runs(df)
     if not flagged_df.empty:
-        print(f"PERHATIAN: {len(flagged_df)} run DIKELUARKAN dari analisis utama karena "
-              f"phase_timing_discrepancy_warning — periksa manual sebelum memutuskan apakah "
-              f"layak dimasukkan kembali:")
-        print(flagged_df[["run_id", "discrepancy_warning"]].to_string(index=False))
+        print(f"INFO: {len(flagged_df)} run Kondisi A mengalami CFS throttling "
+              f"(throttled_usec_delta > 0) — TETAP masuk analisis utama, "
+              f"namun diuji ulang secara terpisah di throttling sensitivity check.")
+        print(flagged_df[["run_id", "throttled_usec_delta"]].to_string(index=False))
+        print()
+
+    n_missing_cgroup = df["missing_cgroup_snapshot"].sum() if "missing_cgroup_snapshot" in df.columns else 0
+    if n_missing_cgroup > 0:
+        print(f"INFO: {int(n_missing_cgroup)} run kehilangan snapshot cgroup (terkena race condition). "
+              f"Throttled runs mungkin undercounted.")
         print()
 
     n_instances = df["instance"].nunique()
@@ -553,6 +597,8 @@ def main():
         print("  CATATAN: Analisis RQ1-RQ4 di bawah tetap menggunakan data GABUNGAN")
         print("  (30 rep). Hasil per blok tersedia di combined_results.csv kolom 'block'.")
         print()
+
+    check_warming_trend(df)
 
     summarize(df)
     mw_results = run_mann_whitney_with_bonferroni(df)
@@ -569,9 +615,9 @@ def main():
     print(f"Data gabungan (run bersih, sudah lolos filter) disimpan ke: {csv_out}")
 
     if not flagged_df.empty:
-        flagged_csv_out = results_dir / "flagged_for_manual_review.csv"
+        flagged_csv_out = results_dir / "throttled_runs_for_sensitivity.csv"
         flagged_df.to_csv(flagged_csv_out, index=False)
-        print(f"Run yang ditandai discrepancy (perlu review manual) disimpan ke: {flagged_csv_out}")
+        print(f"Run yang ditandai mengalami throttling disimpan ke: {flagged_csv_out}")
 
 
 if __name__ == "__main__":

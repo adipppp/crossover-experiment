@@ -127,8 +127,10 @@ def run_perf_stat(bin_path: Path, mode: str) -> dict:
          "-e", ",".join(PERF_EVENTS),
          str(bin_path), mode]
     )
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
     r = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
     )
     # perf stat menulis output ke stderr; stdout berisi output benchmark (kosong)
     return parse_perf_csv(r.stderr)
@@ -161,8 +163,7 @@ def parse_perf_csv(perf_stderr: str) -> dict:
             results[event_clean] = None
         else:
             try:
-                # Hapus titik ribuan jika ada (format beberapa locale)
-                results[event_clean] = float(raw_value.replace(",", "").replace(".", "", raw_value.count(".") - 1))
+                results[event_clean] = float(raw_value)
             except ValueError:
                 results[event_clean] = None
 
