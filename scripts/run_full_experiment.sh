@@ -87,7 +87,8 @@ import json, sys
 with open(sys.argv[1]) as f: state = json.load(f)
 for blok in ("block1", "block2"):
     b = state[blok]
-    print(f"  {blok.upper()} ({b['order'].replace('_then_', ' \u2192 ')})")
+    order_str = b['order'].replace('_then_', ' -> ')
+    print(f"  {blok.upper()} ({order_str})")
     print(f"    Status    : {b['status']}")
     print(f"    Dimulai   : {b['started_at'] or '-'}")
     print(f"    Selesai   : {b['completed_at'] or '-'}")
