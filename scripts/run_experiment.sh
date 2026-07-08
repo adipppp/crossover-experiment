@@ -185,6 +185,10 @@ for instance in "${INSTANCES[@]}"; do
     POLL_TICK_SECONDS=0.5
     MAX_TICKS=$(( POD_START_TIMEOUT_SECONDS * 2 ))  # karena tiap tick = 0.5s
     ticks=0
+    # CATATAN: containerStatuses hanya mencakup main container (bukan initContainers).
+    # Selama stage-instance (initContainer) berjalan, jsonpath ini mengembalikan
+    # string kosong -> loop terus menunggu. Loop baru keluar saat solver container
+    # benar-benar Running -- perilaku yang kita inginkan.
     until kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.containerStatuses[0].state.running}' 2>/dev/null | grep -q "startedAt"; do
       sleep "$POLL_TICK_SECONDS"
       ticks=$((ticks + 1))

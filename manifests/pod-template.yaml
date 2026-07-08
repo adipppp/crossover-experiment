@@ -53,7 +53,7 @@ spec:
           mountPath: /app/instances
   containers:
     - name: solver
-      image: crossover-experiment/gurobi-solver:latest
+      image: crossover-experiment/gurobi-solver:v1.0.0
       imagePullPolicy: IfNotPresent
       command:
         - python

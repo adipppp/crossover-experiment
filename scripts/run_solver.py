@@ -179,7 +179,10 @@ def main():
                                         # Tanpa ini, Gurobi bisa memilih concurrent optimizer yang
                                         # menjalankan simplex paralel terpisah dari barrier, sehingga
                                         # asumsi "callback SIMPLEX pertama = awal crossover" tidak valid.
-        env.setParam("Crossover", 4)   # default; aktifkan crossover (bukan 0/disabled)
+        env.setParam("Crossover", 4)
+        # Explicit: paksa push step primal+dual (lihat Subbab "Perangkat Lunak dan Parameter Solver").
+        # Gurobi default: -1 (otomatis, bisa melewati crossover pada beberapa instance).
+        # Crossover=0: nonaktif sepenuhnya. Nilai 4 dipakai agar fase ini selalu tereksekusi penuh.
         env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
         if args.threads > 0:
             env.setParam("Threads", args.threads)

@@ -680,8 +680,8 @@ Untuk menjalankan skrip analisis, Anda memerlukan pengelola paket `pip` dan pust
 sudo apt-get update
 sudo apt-get install -y python3-pip
 
-# Install pustaka analisis (mengabaikan error/warning system-wide package di Ubuntu 22.04)
-pip3 install --break-system-packages pandas scipy
+# Install pustaka analisis
+pip3 install --no-warn-script-location pandas scipy
 
 # Jalankan skrip analisis
 python3 scripts/analyze_results.py --results-dir /mnt/experiment-data/results
