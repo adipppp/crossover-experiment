@@ -241,10 +241,10 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
 
     for condition in sorted(df["condition"].unique()):
         print(f"\n--- Kondisi: {condition} ---")
-        subset = df[df["condition"] == condition]
+        cond_df = df[df["condition"] == condition]
         
         # 1. Involuntary Context Switches Correlation
-        clean_ctxt = subset.dropna(subset=["involuntary_ctxt_switches_delta_crossover_only", "crossover_seconds"])
+        clean_ctxt = cond_df.dropna(subset=["involuntary_ctxt_switches_delta_crossover_only", "crossover_seconds"])
         if len(clean_ctxt) < 4:
             print(f"  [Context Switches] Data tidak cukup untuk korelasi (n={len(clean_ctxt)}).")
         elif clean_ctxt["involuntary_ctxt_switches_delta_crossover_only"].nunique() <= 1:
@@ -257,7 +257,7 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
             print(f"  [Context Switches] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ctxt)}")
 
         # 2. Cache Miss Rate Correlation (PMU Counter Triangulation)
-        clean_cache = subset.dropna(subset=["cache_miss_rate", "crossover_seconds"])
+        clean_cache = cond_df.dropna(subset=["cache_miss_rate", "crossover_seconds"])
         if len(clean_cache) < 4:
             print(f"  [Cache Miss Rate] Data tidak cukup untuk korelasi (n={len(clean_cache)}).")
         elif clean_cache["cache_miss_rate"].nunique() <= 1:
@@ -273,10 +273,10 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
         # IPC yang lebih rendah pada kondisi none mengindikasikan lebih banyak stall
         # memori akibat cache miss; IPC yang lebih tinggi pada static mengindikasikan
         # perbaikan efisiensi eksekusi (bukan hanya konsistensi alokasi waktu CPU).
-        clean_ipc = subset.dropna(subset=["ipc", "crossover_seconds"])
+        clean_ipc = cond_df.dropna(subset=["ipc", "crossover_seconds"])
         if len(clean_ipc) < 4:
             print(f"  [IPC]            Data tidak cukup untuk korelasi (n={len(clean_ipc)}).")
-        elif "ipc" not in subset.columns or clean_ipc["ipc"].nunique() <= 1:
+        elif "ipc" not in cond_df.columns or clean_ipc["ipc"].nunique() <= 1:
             print(f"  [IPC]            Varians nol atau kolom tidak tersedia (PMU mungkin NO-GO).")
         else:
             rho, p_value = stats.spearmanr(
@@ -496,8 +496,14 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
     )
     n_throttled = throttled_mask.sum()
     n_total_none = (df_all["condition"] == "none").sum()
+    n_missing = (
+        (df_all["condition"] == "none") &
+        (df_all.get("missing_cgroup_snapshot", False) == True)
+    ).sum()
 
     print(f"  Run Kondisi A dengan throttled_usec_delta > 0: {n_throttled} / {n_total_none}")
+    if n_missing > 0:
+        print(f"  Run Kondisi A dengan missing_cgroup_snapshot: {n_missing} (tidak diketahui status throttling-nya)")
 
     if n_throttled == 0:
         print("  Tidak ada run yang ter-throttle — sensitivity check tidak berlaku.")

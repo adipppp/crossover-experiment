@@ -391,6 +391,12 @@ def main():
     except ValueError:
         numa_nodes = 1
 
+    if numa_nodes > 1:
+        print(f"\n  ⚠  PERINGATAN: VM memiliki {numa_nodes} NUMA node.")
+        print("      Proposal mengasumsikan single-node NUMA untuk menghilangkan NUMA latency")
+        print("      sebagai confounder. Pertimbangkan numactl --cpunodebind=0 atau dokumentasikan")
+        print("      di Subbab Keterbatasan Metodologis.\n")
+
     vcpu_to_physical_core = {
         str(e["cpu"]): {"core": e["core"], "socket": e["socket"], "node": e["node"]}
         for e in entries

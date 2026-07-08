@@ -184,8 +184,10 @@ def main():
         # Gurobi default: -1 (otomatis, bisa melewati crossover pada beberapa instance).
         # Crossover=0: nonaktif sepenuhnya. Nilai 4 dipakai agar fase ini selalu tereksekusi penuh.
         env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
-        if args.threads > 0:
-            env.setParam("Threads", args.threads)
+        if args.threads <= 0:
+            raise ValueError(f"--threads must be a positive integer (got {args.threads}). "
+                             "Gurobi thread auto-detection is a proposal confounder.")
+        env.setParam("Threads", args.threads)
 
         model = gp.read(args.instance, env=env)
 

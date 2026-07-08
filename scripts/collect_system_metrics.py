@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import time
+import signal
 from pathlib import Path
 
 
@@ -309,10 +310,10 @@ def main():
     # Terminate perf process if it was started
     if perf_proc is not None:
         try:
-            perf_proc.terminate()
-            perf_proc.wait(timeout=5)
+            perf_proc.send_signal(signal.SIGINT)
+            perf_proc.wait(timeout=10)
         except Exception:
-            pass
+            perf_proc.kill()
     if perf_log_file is not None:
         perf_log_file.close()
 
