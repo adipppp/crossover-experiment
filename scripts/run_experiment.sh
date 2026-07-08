@@ -120,9 +120,11 @@ fi
 
 # Secondary check: verify kubelet is live and the node condition is Ready
 NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-if [[ -n "$NODE_NAME" ]] && ! kubectl get node "$NODE_NAME" -o jsonpath='{.status.conditions[-1].type}' 2>/dev/null | grep -q "Ready"; then
-  echo "FATAL: Node tidak Ready — kubelet mungkin gagal start setelah policy switch." >&2
-  exit 1
+if [[ -n "$NODE_NAME" ]]; then
+  if ! kubectl wait --for=condition=Ready "node/$NODE_NAME" --timeout=60s >/dev/null 2>&1; then
+    echo "FATAL: Node tidak Ready — kubelet mungkin gagal start setelah policy switch." >&2
+    exit 1
+  fi
 fi
 
 # Verifikasi dukungan perf stat untuk hardware counters (PMU Virtualization)
@@ -217,8 +219,9 @@ for instance in "${INSTANCES[@]}"; do
       --output "$metrics_output" &
     METRICS_PID=$!
     
-    # Pin metrics collector to core 0 (system reserved) to prevent interference with solver
-    taskset -cp 0 $METRICS_PID >/dev/null 2>&1 || true
+    # Pin metrics collector to reserved core to prevent interference with solver
+    RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null || echo "0")
+    taskset -cp "$RESERVED_CPU" $METRICS_PID >/dev/null 2>&1 || true
 
     echo ">>> Menunggu Pod selesai (solve berjalan)..."
     TIMEOUT=1800

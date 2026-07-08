@@ -41,10 +41,10 @@ spec:
       resources:
         requests:
           cpu: "1"
-          memory: "24Gi"
+          memory: "2Gi"
         limits:
           cpu: "1"
-          memory: "24Gi"
+          memory: "2Gi"
       volumeMounts:
         - name: host-instances
           mountPath: /mnt/host-instances
@@ -53,7 +53,7 @@ spec:
           mountPath: /app/instances
   containers:
     - name: solver
-      image: crossover-experiment/gurobi-solver:v1.0.0
+      image: crossover-experiment/gurobi-solver:latest
       imagePullPolicy: IfNotPresent
       command:
         - python

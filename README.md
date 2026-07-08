@@ -50,7 +50,7 @@ crossover-experiment/
 
 ## Keputusan Desain Kunci (dan Alasannya)
 
-1. **Sequential, bukan paralel** — Lisensi Gurobi WLS akademik dibatasi 2 sesi konkuren. `run_experiment.sh` didesain untuk berjalan sekuensial dengan cooldown 10 detik antar run (300 detik jika Pod gagal/OOMKilled, untuk mematuhi token lifespan WLS).
+1. **Sequential, bukan paralel** — Lisensi Gurobi WLS akademik dibatasi 2 sesi konkuren. `run_experiment.sh` didesain untuk berjalan sekuensial dengan cooldown 30 detik antar run (300 detik jika Pod gagal/OOMKilled, untuk mematuhi token lifespan WLS).
 
 2. **Standardisasi Nama Pod (RFC 1123)** — Instance Mittelmann menggunakan huruf besar dan underscore (mis. `L1_sixm1000obs.mps`). Skrip orkestrasi men-sanitize ke lowercase + hyphen untuk nama Pod, tanpa mengubah nama file asli.
 

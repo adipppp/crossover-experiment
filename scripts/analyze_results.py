@@ -69,7 +69,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "run_id": run_id_str,
             "block": block,
             "condition": data.get("condition"),
-            "instance": data.get("instance"),
+            "instance": Path(data.get("instance", "")).stem if data.get("instance") else None,
             "status_code": data.get("status_code"),
             "crossover_seconds": data.get("crossover_seconds"),
             "barrier_seconds": data.get("barrier_seconds"),

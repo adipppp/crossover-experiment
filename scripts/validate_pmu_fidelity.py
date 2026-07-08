@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 validate_pmu_fidelity.py — Validasi fidelitas hardware performance counter (PMU)
 pada VM cloud sebelum eksperimen utama dijalankan.
@@ -57,6 +58,9 @@ MIN_RATIO_FACTOR = 5.0
 
 # Batas bawah nilai absolut untuk mencegah false-positive pada miss rate
 # yang keduanya sangat kecil (mis. keduanya ~0 jika counter tidak tersedia).
+# Threshold 30% (bukan 90%) untuk toleransi variabilitas VM cloud dan
+# kemungkinan sebagian akses menghit LLC. Asalkan high > low secara signifikan
+# (rasio ≥ 5×), counter dianggap valid.
 MIN_HIGH_MISS_RATE = 0.30  # high-miss mode harus menghasilkan miss rate ≥ 30%
 MAX_LOW_MISS_RATE  = 0.20  # low-miss mode harus menghasilkan miss rate ≤ 20%
 
