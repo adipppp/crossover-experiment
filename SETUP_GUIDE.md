@@ -297,7 +297,7 @@ memverifikasi secara cepat bahwa VM yang aktif konsisten dengan laporan tersebut
 # Jumlah vCPU yang terlihat harus sesuai opsi yang dipilih:
 #   Option 1 (c2-standard-8, SMT aktif)   → 8 vCPU
 #   Option 2 (c2-standard-8, SMT nonaktif) → 4 vCPU
-#   Option 3 (c2-standard-16, SMT aktif)   → 16 vCPU
+#   Option 3 (c2-standard-16, SMT nonaktif) → 8 vCPU
 nproc
 
 # Konfirmasi threads-per-core sesuai opsi:
@@ -544,8 +544,6 @@ cd ~/crossover-experiment
 kubectl apply -f manifests/00-namespace.yaml
 sudo mkdir -p /mnt/experiment-data/{instances,results}
 sudo chmod -R 777 /mnt/experiment-data
-kubectl apply -f manifests/02-storage.yaml
-
 ```
 
 ### 4.2 Buat Secret kredensial Gurobi WLS
