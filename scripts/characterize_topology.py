@@ -247,56 +247,96 @@ def analyze_options(total_vcpus, threads_per_core, n_physical_cores,
             "vm_recreation_required": False,
         }
 
+    already_option2 = (not smt_active) and (total_vcpus < 8)
+    
     # ── Option 2 ─────────────────────────────────────────────────────────────
-    # Dengan --threads-per-core=1: hanya physical_cores vCPU yang terlihat guest.
-    vcpus_smt_off = n_physical_cores
-    option2_viable = vcpus_smt_off >= CPUS_NEEDED
-    options["option2"] = {
-        "viable": option2_viable,
-        "rationale": (
-            f"Menonaktifkan SMT (--threads-per-core=1) menyisakan {vcpus_smt_off} vCPU "
-            f"(1 per physical core). Dibutuhkan {CPUS_NEEDED} vCPU "
-            f"({RESERVED_CPUS} reserved + {SOLVER_THREADS} solver). "
-            + (
-                f"{vcpus_smt_off} >= {CPUS_NEEDED} — FEASIBLE dengan isolasi cache lebih bersih "
-                f"(tidak ada sibling pair sama sekali)."
-                if option2_viable else
-                f"Hanya {vcpus_smt_off} vCPU tersedia setelah SMT dimatikan, "
-                f"kurang dari {CPUS_NEEDED} yang dibutuhkan. TIDAK FEASIBLE "
-                f"tanpa mengurangi jumlah solver thread (bertentangan dengan desain proposal: "
-                f"Threads=4 dan Guaranteed QoS dengan requests.cpu=4)."
-            )
-        ),
-        "vcpus_after_smt_off":      vcpus_smt_off,
-        "vm_recreation_required":   True,
-        "gcloud_flag_to_add":       "--threads-per-core=1",
-        "note": (
-            "GCP menghitung kuota berdasarkan machine type nominal (c2-standard-8 = 8 vCPU), "
-            "bukan jumlah thread yang terlihat guest setelah SMT dimatikan."
-        ),
-    }
+    # Dengan --threads-per-core=1: hanya physical_cores vCPU yang terlihat guest (jika di-recreate dari VM saat ini dengan SMT on).
+    # Namun jika sudah SMT off, vcpus adalah total_vcpus saat ini.
+    vcpus_smt_off = total_vcpus if not smt_active else n_physical_cores
+    option2_viable = vcpus_smt_off >= CPUS_NEEDED and not already_option2
+    
+    if already_option2:
+        options["option2"] = {
+            "viable": False,
+            "rationale": (
+                f"VM saat ini sudah mematikan SMT dan hanya memiliki {total_vcpus} vCPU. "
+                f"Dibutuhkan {CPUS_NEEDED} vCPU. TIDAK FEASIBLE."
+            ),
+            "vm_recreation_required": False,
+        }
+    else:
+        options["option2"] = {
+            "viable": option2_viable,
+            "rationale": (
+                f"Menonaktifkan SMT (--threads-per-core=1) pada tipe mesin ini akan menyisakan {vcpus_smt_off} vCPU "
+                f"(1 per physical core). Dibutuhkan {CPUS_NEEDED} vCPU "
+                f"({RESERVED_CPUS} reserved + {SOLVER_THREADS} solver). "
+                + (
+                    f"{vcpus_smt_off} >= {CPUS_NEEDED} — FEASIBLE dengan isolasi cache lebih bersih "
+                    f"(tidak ada sibling pair sama sekali)."
+                    if option2_viable else
+                    f"Hanya {vcpus_smt_off} vCPU tersedia setelah SMT dimatikan, "
+                    f"kurang dari {CPUS_NEEDED} yang dibutuhkan. TIDAK FEASIBLE "
+                    f"tanpa mengurangi jumlah solver thread (bertentangan dengan desain proposal: "
+                    f"Threads=4 dan Guaranteed QoS dengan requests.cpu=4)."
+                )
+            ),
+            "vcpus_after_smt_off":      vcpus_smt_off,
+            "vm_recreation_required":   True,
+            "gcloud_flag_to_add":       "--threads-per-core=1",
+            "note": (
+                "GCP menghitung kuota berdasarkan machine type nominal, "
+                "bukan jumlah thread yang terlihat guest setelah SMT dimatikan."
+            ),
+        }
 
     # ── Option 3 ─────────────────────────────────────────────────────────────
     # c2-standard-16: 8 vCPU, 8 physical core (SMT dinonaktifkan)
     # 4 solver + 1 reserved → 4 core fisik eksklusif tanpa SMT packing dari Kubernetes
-    options["option3"] = {
-        "viable": "requires_vm_recreation",
-        "rationale": (
-            "c2-standard-16 dengan --threads-per-core=1 mematikan SMT sehingga VM "
-            "hanya melihat 8 vCPU murni. Ini adalah satu-satunya cara memaksa Kubelet "
-            "memberikan 4 core fisik terisolasi tanpa SMT packing. Membutuhkan kuota "
-            "16 vCPU GCP. VM harus dibuat ulang."
-        ),
-        "target_machine_type":    "c2-standard-16",
-        "expected_vcpus":         8,
-        "expected_physical_cores": 8,
-        "vm_recreation_required": True,
-        "gcloud_machine_type_flag": "--machine-type=c2-standard-16 --threads-per-core=1",
-        "quota_required_vcpus":   16,
-    }
+    already_option3 = (not smt_active) and (total_vcpus >= 8)
+    
+    if already_option3:
+        options["option3"] = {
+            "viable": True,
+            "rationale": (
+                f"VM saat ini sudah dikonfigurasi sebagai Option 3 "
+                f"(SMT nonaktif, {total_vcpus} vCPU). "
+                f"Isolasi cache bersih tanpa sibling pair. "
+                f"Kubelet akan memberikan {SOLVER_THREADS} core fisik eksklusif tanpa SMT packing."
+            ),
+            "target_machine_type":    "c2-standard-16",
+            "expected_vcpus":         8,
+            "expected_physical_cores": 8,
+            "vm_recreation_required": False,
+            "solver_cpus":            solver_cpus,
+            "reserved_cpu":           reserved_cpu,
+            "contamination":          contamination,
+        }
+    else:
+        options["option3"] = {
+            "viable": "requires_vm_recreation",
+            "rationale": (
+                "c2-standard-16 dengan --threads-per-core=1 mematikan SMT sehingga VM "
+                "hanya melihat 8 vCPU murni. Ini adalah satu-satunya cara memaksa Kubelet "
+                "memberikan 4 core fisik terisolasi tanpa SMT packing. Membutuhkan kuota "
+                "16 vCPU GCP. VM harus dibuat ulang."
+            ),
+            "target_machine_type":    "c2-standard-16",
+            "expected_vcpus":         8,
+            "expected_physical_cores": 8,
+            "vm_recreation_required": True,
+            "gcloud_machine_type_flag": "--machine-type=c2-standard-16 --threads-per-core=1",
+            "quota_required_vcpus":   16,
+        }
 
     # ── Rekomendasi ───────────────────────────────────────────────────────────
-    if options["option1"]["viable"] is True:
+    if options.get("option3", {}).get("viable") is True and not options["option3"].get("vm_recreation_required"):
+        recommendation = "option3"
+        rec_rationale  = (
+            "VM saat ini sudah dikonfigurasi sebagai Option 3 (SMT off, >=8 vCPU). "
+            "Tidak perlu recreate VM. Lanjutkan dengan menetapkan opsi ini."
+        )
+    elif options["option1"]["viable"] is True:
         recommendation = "option1"
         rec_rationale  = (
             "Option 1 layak digunakan tanpa recreate VM. "
@@ -485,7 +525,7 @@ def main():
         label  = labels.get(str(viable) if not isinstance(viable, bool) else viable, str(viable))
         print(f"\n  [{opt_key.upper()}] {label}")
         print(f"  {opt.get('rationale', '')}")
-        if opt_key == "option1" and opt.get("viable") is True:
+        if (opt_key == "option1" or opt_key == "option3") and opt.get("viable") is True:
             print(f"  Solver CPUs  : {opt.get('solver_cpus')}")
             print(f"  Reserved CPU : {opt.get('reserved_cpu')}")
             for c in opt.get("contamination", []):
