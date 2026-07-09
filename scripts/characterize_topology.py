@@ -31,6 +31,9 @@ from pathlib import Path
 
 SOLVER_THREADS = 4  # resources.requests.cpu = resources.limits.cpu = 4 (Guaranteed QoS)
 RESERVED_CPUS  = 1  # reservedSystemCPUs: satu core untuk daemon Kubernetes dan sistem
+# Catatan: Init container `stage-instance` meminta cpu: 1 (Guaranteed QoS), namun karena
+# init container berjalan secara sekuensial sebelum container solver, Kubernetes akan memakai
+# cpusets secara bergantian/berbagi. Sehingga kebutuhan kapasitas total tetap 5 vCPUs.
 CPUS_NEEDED    = SOLVER_THREADS + RESERVED_CPUS  # = 5
 
 # ─────────────────────────────────────────────────────────────────────────────

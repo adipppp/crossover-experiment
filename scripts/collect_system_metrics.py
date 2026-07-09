@@ -2,7 +2,7 @@
 """
 collect_system_metrics.py — Dijalankan di VM HOST (bukan di dalam Pod/container),
 memonitor metrik sistem sebuah proses container Kubernetes selama solve berjalan:
-  - involuntary context switches (dari /proc/<pid>/status), disampling KONTINU
+  - involuntary context switches (dari /proc/<pid>/task/<tid>/status), disampling KONTINU
     sepanjang siklus hidup proses, lalu dipotong agar sesuai rentang waktu fase
     crossover saja (lihat align_samples_to_crossover_phase), bukan whole-process.
   - CFS throttling statistics (dari cpu.stat cgroup v2 container) — tetap
@@ -281,8 +281,7 @@ def main():
     perf_cmd = [
         "sudo", "env", "LC_ALL=C", "perf", "stat",
         "-p", str(pid),
-        "-e", "cache-misses,cache-references,L1-dcache-load-misses,L1-dcache-loads,instructions,cycles",
-        "--", "sleep", "3600"
+        "-e", "cache-misses,cache-references,L1-dcache-load-misses,L1-dcache-loads,instructions,cycles"
     ]
     perf_proc = None
     perf_log_file = None

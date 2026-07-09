@@ -101,6 +101,14 @@ INSTANCES=(
   "cont11.mps"
 )
 
+# Verifikasi ketersediaan semua file instance
+for instance in "${INSTANCES[@]}"; do
+  if [[ ! -f "$INSTANCES_DIR/$instance" ]]; then
+    echo "FATAL: File instance benchmark '$INSTANCES_DIR/$instance' tidak ditemukan." >&2
+    exit 1
+  fi
+done
+
 echo "================================================================"
 echo " EKSPERIMEN: kondisi=$CONDITION | blok=$BLOCK | repetisi=$N_REPS | cpu=$CPU_COUNT"
 echo " Instance: ${INSTANCES[*]}"
@@ -209,8 +217,11 @@ for instance in "${INSTANCES[@]}"; do
       fi
     done
 
+    # Pin metrics collector to reserved core to prevent interference with solver
+    RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null || echo "0")
+
     metrics_output="$RESULTS_DIR/${run_id}.sysmetrics.json"
-    python3 "$SCRIPT_DIR/collect_system_metrics.py" \
+    taskset -c "$RESERVED_CPU" python3 "$SCRIPT_DIR/collect_system_metrics.py" \
       --pod-name "$pod_name" \
       --container-name solver \
       --run-id "$run_id" \
@@ -218,10 +229,6 @@ for instance in "${INSTANCES[@]}"; do
       --poll-interval 0.05 \
       --output "$metrics_output" &
     METRICS_PID=$!
-    
-    # Pin metrics collector to reserved core to prevent interference with solver
-    RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null || echo "0")
-    taskset -cp "$RESERVED_CPU" $METRICS_PID >/dev/null 2>&1 || true
 
     echo ">>> Menunggu Pod selesai (solve berjalan)..."
     TIMEOUT=1800
