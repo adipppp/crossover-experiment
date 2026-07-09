@@ -133,6 +133,10 @@ class PhaseTimingCallback:
         crossover_seconds = None
         if self.crossover_first_seen_runtime is not None:
             crossover_seconds = round(total_runtime - self.crossover_first_seen_runtime, 6)
+            if crossover_seconds < 0:
+                print("PERINGATAN: crossover_seconds bernilai negatif. Diset ke None.", file=sys.stderr)
+                crossover_seconds = None
+
         
         barrier_seconds = None
         if self.barrier_first_seen_runtime is not None and self.barrier_last_runtime is not None:
@@ -167,8 +171,9 @@ def parse_log_for_phase_split(log_path: str):
 
     text = Path(log_path).read_text(errors="ignore")
 
-    # Tangkap baris-baris iterasi barrier: "   12   1.234e+05  ...    2s"
-    barrier_iter_pattern = re.compile(r"^\s*(\d+)\*?\s+[-\d.e+]+\s+[-\d.e+]+\s+[-\d.e+]+\s+[-\d.e+]+\s+[-\d.e+]+\s+(\d+(?:\.\d+)?)s\s*$", re.MULTILINE)
+    # Tangkap baris-baris iterasi barrier secara lebih longgar:
+    # iteration number (optional *), values, and ends with Xs
+    barrier_iter_pattern = re.compile(r"^\s*(\d+)\*?\s+.*\s+(\d+(?:\.\d+)?)s\s*$", re.MULTILINE)
     matches = barrier_iter_pattern.findall(text)
     barrier_end_time_log = float(matches[-1][1]) if matches else None
     barrier_iterations = int(matches[-1][0]) if matches else None
@@ -189,9 +194,9 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    out_path = None
     if args.check:
         log_path = ""
-        out_path = None
     else:
         if "/" in args.run_id or "\\" in args.run_id or ".." in args.run_id:
             raise ValueError("FATAL: run-id contains invalid path traversal characters.")
@@ -203,20 +208,32 @@ def main():
 
     try:
         env.setParam("LogFile", log_path)
+        
+        # Atur parameter solver yang wajib (juga divalidasi pada --check)
+        env.setParam("Method", 2)       # WAJIB: paksa barrier murni
+        env.setParam("Crossover", 4)    # Explicit: paksa push step primal+dual
+        
         if not args.check:
-            env.setParam("Method", 2)      # WAJIB: paksa barrier murni (bukan automatic/concurrent).
-                                            # Tanpa ini, Gurobi bisa memilih concurrent optimizer yang
-                                            # menjalankan simplex paralel terpisah dari barrier, sehingga
-                                            # asumsi "callback SIMPLEX pertama = awal crossover" tidak valid.
-            env.setParam("Crossover", 4)
-            # Explicit: paksa push step primal+dual (lihat Subbab "Perangkat Lunak dan Parameter Solver").
-            # Gurobi default: -1 (otomatis, bisa melewati crossover pada beberapa instance).
-            # Crossover=0: nonaktif sepenuhnya. Nilai 4 dipakai agar fase ini selalu tereksekusi penuh.
-            env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
+            env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver
             if args.threads <= 0:
                 raise ValueError(f"--threads must be a positive integer (got {args.threads}). "
                                  "Gurobi thread auto-detection is a proposal confounder.")
             env.setParam("Threads", args.threads)
+        else:
+            # Di check mode, jika threads diberikan, validasikan nilainya
+            if args.threads is not None and args.threads <= 0:
+                raise ValueError(f"--threads must be a positive integer (got {args.threads}).")
+            if args.threads is not None:
+                env.setParam("Threads", args.threads)
+
+        # Validasi pre-flight terhadap tipe parameter dan batasan nilainya
+        try:
+            crossover_info = env.getParamInfo("Crossover")
+            min_val, max_val = crossover_info[3], crossover_info[4]
+            if not (min_val <= 4 <= max_val):
+                raise ValueError(f"Nilai 4 tidak didukung oleh parameter Crossover (range: [{min_val}, {max_val}])")
+        except gp.GurobiError as e:
+            raise ValueError(f"Gagal memvalidasi parameter Crossover: {e}")
 
         model = gp.read(args.instance, env=env)
 
@@ -275,6 +292,8 @@ def main():
         # Metrik utama crossover time yang dipakai dalam analisis (lihat Metode):
         # diambil dari callback_summary, BUKAN dari log_derived.
         result["crossover_seconds"] = callback_summary["crossover_duration_seconds_callback"]
+        result["barrier_iteration_seconds"] = callback_summary["barrier_duration_seconds_callback"]
+        # Maintain old key for backward compatibility/historical logs
         result["barrier_seconds"] = callback_summary["barrier_duration_seconds_callback"]
 
         # Peringatan jika kedua sumber pengukuran berbeda signifikan (>0.5s),
