@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -25,14 +26,35 @@ import gurobipy as gp
 from gurobipy import GRB
 
 
+def get_host_uptime() -> float | None:
+    """Membaca status uptime host dari /proc/uptime."""
+    try:
+        with open("/proc/uptime", "r") as f:
+            return float(f.readline().split()[0])
+    except Exception:
+        return None
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Jalankan satu sesi solve Gurobi dan catat metrik crossover.")
     parser.add_argument("--instance", required=True, help="Path file model LP (.mps/.mps.gz) di dalam container")
-    parser.add_argument("--condition", required=True, choices=["none", "static"], help="Label kondisi CPU Manager")
-    parser.add_argument("--run-id", required=True, help="Identifier unik untuk run ini, mis. none-run03")
+    parser.add_argument("--condition", choices=["none", "static"], help="Label kondisi CPU Manager")
+    parser.add_argument("--run-id", help="Identifier unik untuk run ini, mis. none-run03")
     parser.add_argument("--output-dir", default="/app/results", help="Direktori output JSON hasil")
-    parser.add_argument("--threads", type=int, default=0, help="Param Threads Gurobi; 0 = otomatis (pakai semua core yang terlihat container)")
-    return parser.parse_args()
+    parser.add_argument("--threads", type=int, help="Param Threads Gurobi (wajib bilangan bulat positif)")
+    parser.add_argument("--check", action="store_true", help="Validasi lisensi dan instans mps tanpa menjalankan optimize")
+    
+    args = parser.parse_args()
+    
+    if not args.check:
+        missing = []
+        if not args.condition: missing.append("--condition")
+        if not args.run_id: missing.append("--run-id")
+        if args.threads is None: missing.append("--threads")
+        if missing:
+            parser.error(f"Argumen berikut wajib diberikan kecuali jika --check digunakan: {', '.join(missing)}")
+            
+    return args
 
 
 def build_env(max_retries: int = 3, backoff_seconds: float = 5.0):
@@ -114,6 +136,9 @@ class PhaseTimingCallback:
         
         barrier_seconds = None
         if self.barrier_first_seen_runtime is not None and self.barrier_last_runtime is not None:
+            # CATATAN: barrier_seconds hanya menghitung durasi iterasi barrier
+            # (dari callback BARRIER pertama ke terakhir), bukan seluruh fase barrier
+            # karena mengecualikan waktu presolve/startup Gurobi.
             barrier_seconds = round(self.barrier_last_runtime - self.barrier_first_seen_runtime, 6)
             
         return {
@@ -164,32 +189,40 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if "/" in args.run_id or "\\" in args.run_id or ".." in args.run_id:
-        raise ValueError("FATAL: run-id contains invalid path traversal characters.")
-        
-    log_path = str(output_dir / f"{args.run_id}.log")
-    out_path = output_dir / f"{args.run_id}.json"
+    if args.check:
+        log_path = ""
+        out_path = None
+    else:
+        if "/" in args.run_id or "\\" in args.run_id or ".." in args.run_id:
+            raise ValueError("FATAL: run-id contains invalid path traversal characters.")
+        log_path = str(output_dir / f"{args.run_id}.log")
+        out_path = output_dir / f"{args.run_id}.json"
 
     env = build_env()
     model = None
 
     try:
         env.setParam("LogFile", log_path)
-        env.setParam("Method", 2)      # WAJIB: paksa barrier murni (bukan automatic/concurrent).
-                                        # Tanpa ini, Gurobi bisa memilih concurrent optimizer yang
-                                        # menjalankan simplex paralel terpisah dari barrier, sehingga
-                                        # asumsi "callback SIMPLEX pertama = awal crossover" tidak valid.
-        env.setParam("Crossover", 4)
-        # Explicit: paksa push step primal+dual (lihat Subbab "Perangkat Lunak dan Parameter Solver").
-        # Gurobi default: -1 (otomatis, bisa melewati crossover pada beberapa instance).
-        # Crossover=0: nonaktif sepenuhnya. Nilai 4 dipakai agar fase ini selalu tereksekusi penuh.
-        env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
-        if args.threads <= 0:
-            raise ValueError(f"--threads must be a positive integer (got {args.threads}). "
-                             "Gurobi thread auto-detection is a proposal confounder.")
-        env.setParam("Threads", args.threads)
+        if not args.check:
+            env.setParam("Method", 2)      # WAJIB: paksa barrier murni (bukan automatic/concurrent).
+                                            # Tanpa ini, Gurobi bisa memilih concurrent optimizer yang
+                                            # menjalankan simplex paralel terpisah dari barrier, sehingga
+                                            # asumsi "callback SIMPLEX pertama = awal crossover" tidak valid.
+            env.setParam("Crossover", 4)
+            # Explicit: paksa push step primal+dual (lihat Subbab "Perangkat Lunak dan Parameter Solver").
+            # Gurobi default: -1 (otomatis, bisa melewati crossover pada beberapa instance).
+            # Crossover=0: nonaktif sepenuhnya. Nilai 4 dipakai agar fase ini selalu tereksekusi penuh.
+            env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver (detik), sedikit di bawah batas shell script (1800s) agar keluar terkontrol.
+            if args.threads <= 0:
+                raise ValueError(f"--threads must be a positive integer (got {args.threads}). "
+                                 "Gurobi thread auto-detection is a proposal confounder.")
+            env.setParam("Threads", args.threads)
 
         model = gp.read(args.instance, env=env)
+
+        if args.check:
+            print(">>> PRE-FLIGHT CHECK BERHASIL: lisensi valid dan model mps berhasil dimuat.")
+            return
 
         pid = os.getpid()
         phase_cb = PhaseTimingCallback()
@@ -235,6 +268,8 @@ def main():
             # dipakai untuk sanity-check, bukan metrik utama dalam analisis).
             "log_derived_crosscheck": log_derived,
             "timestamp_unix": time.time(),
+            # Metadata tambahan (sesuai proposal §II)
+            "host_uptime_seconds": get_host_uptime(),
         }
 
         # Metrik utama crossover time yang dipakai dalam analisis (lihat Metode):
@@ -265,16 +300,17 @@ def main():
         # menghilang dari hasil), lalu lempar ulang exception supaya proses exit
         # dengan kode non-zero — Pod akan berstatus Failed (bukan diam-diam
         # Succeeded), sehingga run_experiment.sh dapat mendeteksinya dengan benar.
-        failure_result = {
-            "run_id": args.run_id,
-            "condition": args.condition,
-            "instance": args.instance,
-            "status_code": None,
-            "error": f"{type(e).__name__}: {e}",
-            "timestamp_unix": time.time(),
-        }
-        out_path.write_text(json.dumps(failure_result, indent=2))
-        print(f"FATAL: run {args.run_id} gagal: {e}", file=sys.stderr)
+        if not args.check and out_path is not None:
+            failure_result = {
+                "run_id": args.run_id,
+                "condition": args.condition,
+                "instance": args.instance,
+                "status_code": None,
+                "error": f"{type(e).__name__}: {e}",
+                "timestamp_unix": time.time(),
+            }
+            out_path.write_text(json.dumps(failure_result, indent=2))
+        print(f"FATAL: run {args.run_id if not args.check else 'check'} gagal: {e}", file=sys.stderr)
         raise
 
     finally:
@@ -284,6 +320,12 @@ def main():
         if model is not None:
             model.dispose()
         env.dispose()
+
+        # Synchronize RAM results to host disk to comply with Memory-only I/O constraint
+        host_out = Path("/app/host_results")
+        if host_out.exists():
+            for f in output_dir.glob(f"{args.run_id}.*"):
+                shutil.copy2(f, host_out)
 
 
 if __name__ == "__main__":

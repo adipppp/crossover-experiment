@@ -520,14 +520,14 @@ gcloud compute scp --recurse ./crossover-experiment crossover-experiment-vm:~/ -
 
 ```bash
 cd ~/crossover-experiment
-docker build -t crossover-experiment/gurobi-solver:latest .
+docker build -t crossover-experiment/gurobi-solver:v1.0.0 .
 
 ```
 
 ### 3.4 Import image ke containerd
 
 ```bash
-docker save crossover-experiment/gurobi-solver:latest -o /tmp/solver-image.tar
+docker save crossover-experiment/gurobi-solver:v1.0.0 -o /tmp/solver-image.tar
 sudo ctr -n k8s.io images import /tmp/solver-image.tar
 rm /tmp/solver-image.tar
 

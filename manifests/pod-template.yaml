@@ -53,7 +53,7 @@ spec:
           mountPath: /app/instances
   containers:
     - name: solver
-      image: crossover-experiment/gurobi-solver:latest
+      image: crossover-experiment/gurobi-solver:v1.0.0
       imagePullPolicy: IfNotPresent
       command:
         - python
@@ -93,14 +93,19 @@ spec:
         - name: mem-instances
           mountPath: /app/instances
           readOnly: true
-        - name: results-host
+        - name: mem-results
           mountPath: /app/results
+        - name: results-host
+          mountPath: /app/host_results
   volumes:
     - name: host-instances
       hostPath:
         path: /mnt/experiment-data/instances
         type: Directory
     - name: mem-instances
+      emptyDir:
+        medium: Memory
+    - name: mem-results
       emptyDir:
         medium: Memory
     - name: results-host
