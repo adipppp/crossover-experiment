@@ -34,7 +34,7 @@ clusterDNS:
 - 10.96.0.10
 clusterDomain: cluster.local
 containerRuntimeEndpoint: unix:///var/run/containerd/containerd.sock
-cpuManagerReconcilePeriod: 10s
+cpuManagerReconcilePeriod: 10s  # default — no change from proposal baseline
 cpuManagerPolicy: static
 crashLoopBackOff: {}
 evictionPressureTransitionPeriod: 0s

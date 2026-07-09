@@ -26,6 +26,16 @@ import signal
 from pathlib import Path
 
 
+
+def get_host_uptime() -> float | None:
+    """Membaca status uptime host dari /proc/uptime."""
+    try:
+        with open("/proc/uptime", "r") as f:
+            return float(f.readline().split()[0])
+    except Exception:
+        return None
+
+
 def find_pod_sandbox_id(pod_name: str) -> str:
     """
     Mendapatkan sandbox ID dari nama Pod Kubernetes via `crictl pods --name`.
@@ -99,7 +109,8 @@ def find_cgroup_path(pid: int) -> Path:
     cgroup_file = Path(f"/proc/{pid}/cgroup")
     content = cgroup_file.read_text().strip()
     # Format cgroup v2 unified: "0::/kubepods.slice/.../cri-containerd-<id>.scope"
-    line = content.splitlines()[-1]
+    # Issue 7: Robust search for 0:: prefix instead of assuming last line
+    line = next((l for l in content.splitlines() if l.startswith("0::")), content.splitlines()[-1])
     rel_path = line.split(":")[-1]
     full_path = Path("/sys/fs/cgroup") / rel_path.lstrip("/")
     if not full_path.exists():
@@ -220,7 +231,9 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
 
 def parse_perf_stat(log_path: Path) -> dict:
     """
-    Mempersing hasil output dari file log mentah sudo perf stat.
+    Mem-parse hasil output dari file log mentah sudo perf stat.
+    Format yang diharapkan adalah human-readable (tanpa flag -x,), berbeda
+    dengan validate_pmu_fidelity.py yang menggunakan format CSV.
     """
     if not log_path.exists():
         return {}
@@ -269,7 +282,7 @@ def main():
         "sudo", "env", "LC_ALL=C", "perf", "stat",
         "-p", str(pid),
         "-e", "cache-misses,cache-references,L1-dcache-load-misses,L1-dcache-loads,instructions,cycles",
-        "--", "sleep", "1800"
+        "--", "sleep", "3600"
     ]
     perf_proc = None
     perf_log_file = None
@@ -308,11 +321,13 @@ def main():
     t_end = time.time()
 
     # Terminate perf process if it was started
+    # Issue 8: Add fallback warning when SIGINT times out and perf stat is forcefully killed
     if perf_proc is not None:
         try:
             perf_proc.send_signal(signal.SIGINT)
             perf_proc.wait(timeout=10)
-        except Exception:
+        except Exception as e:
+            print(f"WARNING: perf stat did not exit cleanly (SIGINT timed out/failed): {e}. Force killing. PMU metrics may be missing.", file=sys.stderr)
             perf_proc.kill()
     if perf_log_file is not None:
         perf_log_file.close()
@@ -382,6 +397,8 @@ def main():
         "perf_metrics": perf_metrics,
         "cache_miss_rate": cache_miss_rate,
         "ipc": ipc,
+        # Metadata tambahan (sesuai proposal §II)
+        "host_uptime_seconds": get_host_uptime(),
     }
 
     Path(args.output).write_text(json.dumps(result, indent=2))

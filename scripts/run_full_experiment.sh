@@ -173,7 +173,7 @@ check_different_day() {
 
   local day_blk1 day_today
   day_blk1=$(python3 -c "from datetime import datetime; print(datetime.fromisoformat('$blk1_completed').strftime('%Y-%m-%d'))" 2>/dev/null || echo "")
-  day_today=$(date -u +"%Y-%m-%d")
+  day_today=$(date +"%Y-%m-%d")
 
   if [[ "$day_blk1" == "$day_today" ]]; then
     echo ""
@@ -212,7 +212,7 @@ run_block1() {
   check_pmu_verdict
 
   local ts_start
-  ts_start=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  ts_start=$(date +"%Y-%m-%dT%H:%M:%S")
   set_state_field "block1" "status"     "running"
   set_state_field "block1" "started_at" "$ts_start"
 
@@ -221,7 +221,7 @@ run_block1() {
   run_condition "static" 1
 
   local ts_end
-  ts_end=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  ts_end=$(date +"%Y-%m-%dT%H:%M:%S")
   set_state_field "block1" "status"       "completed"
   set_state_field "block1" "completed_at" "$ts_end"
 
@@ -269,7 +269,7 @@ run_block2() {
   check_pmu_verdict
 
   local ts_start
-  ts_start=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  ts_start=$(date +"%Y-%m-%dT%H:%M:%S")
   set_state_field "block2" "status"     "running"
   set_state_field "block2" "started_at" "$ts_start"
 
@@ -278,7 +278,7 @@ run_block2() {
   run_condition "none"   2
 
   local ts_end
-  ts_end=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  ts_end=$(date +"%Y-%m-%dT%H:%M:%S")
   set_state_field "block2" "status"       "completed"
   set_state_field "block2" "completed_at" "$ts_end"
 

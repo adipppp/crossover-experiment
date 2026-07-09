@@ -220,7 +220,7 @@ def compute_miss_rate(stats: dict, miss_key: str, ref_key: str) -> float | None:
     return miss / ref
 
 
-def evaluate(high_stats: dict, low_stats: dict) -> tuple[str, list[str], list[str]]:
+def evaluate(high_stats: dict, low_stats: dict) -> tuple[str, list[str], list[str], float | None, float | None, float | None]:
     """
     Evaluasi go/no-go berdasarkan kriteria proposal.
 
@@ -228,6 +228,9 @@ def evaluate(high_stats: dict, low_stats: dict) -> tuple[str, list[str], list[st
         verdict : "GO" | "NO-GO" | "DEGRADED"
         failures : daftar kriteria yang gagal
         warnings : daftar kondisi mencurigakan (bukan langsung NO-GO)
+        high_rate : cache-miss rate mode "high"
+        low_rate : cache-miss rate mode "low"
+        ratio : rasio high/low
     """
     failures = []
     warnings = []
@@ -400,9 +403,9 @@ def main():
     print()
 
     if high_rate is not None:
-        print(f"  Cache-miss rate (high) : {high_rate:.2%}   (ekspektasi: >90%)")
+        print(f"  Cache-miss rate (high) : {high_rate:.2%}   (ekspektasi: >90% pada bare-metal, threshold kelayakan: >=30% pada VM cloud)")
     if low_rate is not None:
-        print(f"  Cache-miss rate (low)  : {low_rate:.2%}   (ekspektasi: <5%)")
+        print(f"  Cache-miss rate (low)  : {low_rate:.2%}   (ekspektasi: <5% pada bare-metal, threshold kelayakan: <=20% pada VM cloud)")
     if ratio is not None:
         print(f"  Rasio high/low         : {ratio:.1f}×       (minimum: {MIN_RATIO_FACTOR:.0f}×)")
 

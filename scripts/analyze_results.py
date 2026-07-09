@@ -91,12 +91,12 @@ def load_results(results_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def separate_flagged_runs(df: pd.DataFrame):
+def identify_throttled_runs(df: pd.DataFrame):
     """
-    Pisahkan run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
-    Run ini dikeluarkan dari analisis SENSITIVITY saja (lihat
-    run_throttling_sensitivity_check di bawah), BUKAN dari analisis utama RM1.
-    Analisis utama tetap memakai seluruh data.
+    Identifikasi run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
+    Run ini di-flag untuk analisis SENSITIVITY saja (lihat
+    run_throttling_sensitivity_check di bawah), BUKAN untuk dikeluarkan dari
+    analisis utama RM1. Analisis utama tetap memakai seluruh data.
 
     Sesuai proposal Subbab "Analisis Data" RM1:
     "Apabila kedua hasil konsisten, throttling dapat disingkirkan sebagai
@@ -109,8 +109,7 @@ def separate_flagged_runs(df: pd.DataFrame):
         (df["throttled_usec_delta"] > 0)
     )
     flagged = df[throttled_mask].copy()
-    clean   = df.copy()  # analisis utama tetap pakai semua data
-    return clean, flagged
+    return flagged
 
 
 def summarize(df: pd.DataFrame):
@@ -244,7 +243,9 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
         cond_df = df[df["condition"] == condition]
         
         # 1. Involuntary Context Switches Correlation
+        # Issue 5: Print number of valid context switch samples (non-None)
         clean_ctxt = cond_df.dropna(subset=["involuntary_ctxt_switches_delta_crossover_only", "crossover_seconds"])
+        print(f"  [Context Switches] Valid samples (non-None): {len(clean_ctxt)}")
         if len(clean_ctxt) < 4:
             print(f"  [Context Switches] Data tidak cukup untuk korelasi (n={len(clean_ctxt)}).")
         elif clean_ctxt["involuntary_ctxt_switches_delta_crossover_only"].nunique() <= 1:
@@ -267,7 +268,8 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
             rho, p_value = stats.spearmanr(
                 clean_cache["cache_miss_rate"], clean_cache["crossover_seconds"]
             )
-            print(f"  [Cache Miss Rate] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_cache)}")
+            # Issue 2: Inline caveat warning that cache_miss_rate is a whole-process metric
+            print(f"  [Cache Miss Rate] Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_cache)} (WHOLE-PROCESS metric — see §VIII caveat)")
 
         # 3. IPC Correlation (proksi efisiensi eksekusi per siklus — sesuai proposal RQ2)
         # IPC yang lebih rendah pada kondisi none mengindikasikan lebih banyak stall
@@ -284,7 +286,8 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
             )
             # Ekspektasi: rho NEGATIF (IPC tinggi -> crossover cepat)
             direction = "negatif (sesuai ekspektasi)" if rho < 0 else "positif (periksa!)"
-            print(f"  [IPC]            Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ipc)} [{direction}]")
+            # Issue 2: Inline caveat warning that IPC is a whole-process metric
+            print(f"  [IPC]            Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ipc)} [{direction}] (WHOLE-PROCESS metric — see §VIII caveat)")
 
     print(
         "\n  Interpretasi: rho positif & signifikan untuk context-switch/cache-miss"
@@ -333,9 +336,10 @@ def check_warming_trend(df: pd.DataFrame):
 
 def check_barrier_stability(df: pd.DataFrame):
     print("=" * 70)
-    print("STABILITAS FASE BARRIER ANTAR KONDISI")
+    print("STABILITAS FASE BARRIER ANTAR KONDISI (RQ3)")
     print("(Menjawab Rumusan Masalah poin 3 — apakah perbedaan performa benar")
-    print(" berasal dari crossover, bukan dari barrier yang juga berubah)")
+    print(" berasal dari crossover, bukan dari barrier yang juga berubah,")
+    print(" serta konsistensi jumlah iterasi barrier antar konfigurasi)")
     print("=" * 70)
 
     for instance in df["instance"].unique():
@@ -343,14 +347,28 @@ def check_barrier_stability(df: pd.DataFrame):
         group_none = subset[subset["condition"] == "none"]["barrier_seconds"].dropna()
         group_static = subset[subset["condition"] == "static"]["barrier_seconds"].dropna()
 
+        group_none_iters = subset[subset["condition"] == "none"]["barrier_iter_count"].dropna()
+        group_static_iters = subset[subset["condition"] == "static"]["barrier_iter_count"].dropna()
+
         if len(group_none) < 3 or len(group_static) < 3:
             continue
 
         u_stat, p_value = stats.mannwhitneyu(group_none, group_static, alternative="two-sided")
+        
+        iter_none_med = group_none_iters.median() if not group_none_iters.empty else 0
+        iter_static_med = group_static_iters.median() if not group_static_iters.empty else 0
+        if iter_none_med > 0:
+            iter_diff_pct = (abs(iter_none_med - iter_static_med) / iter_none_med) * 100
+        else:
+            iter_diff_pct = 0.0
+
         print(
-            f"  {instance}: median_barrier_none={group_none.median():.4f}s, "
-            f"median_barrier_static={group_static.median():.4f}s, p={p_value:.4f} "
-            f"({'TIDAK signifikan -> barrier stabil, baik' if p_value > ALPHA else 'SIGNIFIKAN -> periksa confounding!'})"
+            f"  {instance}:\n"
+            f"    Waktu Barrier:   median_none={group_none.median():.4f}s, median_static={group_static.median():.4f}s, p={p_value:.4f}\n"
+            f"                    ({'TIDAK signifikan -> barrier stabil, baik' if p_value > ALPHA else 'SIGNIFIKAN -> periksa confounding!'})\n"
+            f"                    (NOTE: barrier_seconds mengecualikan waktu presolve/startup Gurobi)\n"
+            f"    Iterasi Barrier: median_none={iter_none_med:.0f}, median_static={iter_static_med:.0f}, beda={iter_diff_pct:.2f}%\n"
+            f"                    ({'✓ KONSISTEN (beda < 5%)' if iter_diff_pct < 5.0 else '⚠ BEDA (beda >= 5%)'})\n"
         )
     print()
 
@@ -386,8 +404,7 @@ def run_effect_size_analysis(mw_results: dict, alpha_corrected: float):
 
     rows = []
     for instance, r in mw_results.items():
-        n1, n2 = r["n_none"], r["n_static"]
-        rank_biserial = (2 * r["u_stat"]) / (n1 * n2) - 1
+        rank_biserial = r["rank_biserial"]
         significant = r["p_raw"] < alpha_corrected
         rows.append((instance, rank_biserial, r["pct_reduction"], r["p_raw"], significant))
 
@@ -496,10 +513,11 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
     )
     n_throttled = throttled_mask.sum()
     n_total_none = (df_all["condition"] == "none").sum()
-    n_missing = (
-        (df_all["condition"] == "none") &
-        (df_all.get("missing_cgroup_snapshot", False) == True)
-    ).sum()
+    if "missing_cgroup_snapshot" in df_all.columns:
+        missing_mask = (df_all["condition"] == "none") & (df_all["missing_cgroup_snapshot"] == True)
+    else:
+        missing_mask = pd.Series(False, index=df_all.index)
+    n_missing = missing_mask.sum()
 
     print(f"  Run Kondisi A dengan throttled_usec_delta > 0: {n_throttled} / {n_total_none}")
     if n_missing > 0:
@@ -574,11 +592,15 @@ def main():
     if not failed.empty:
         print(f"PERINGATAN: {len(failed)} run TIDAK optimal/gagal, dikeluarkan dari analisis:")
         print(failed[["run_id", "status_code", "error"]].to_string(index=False))
+        # Issue 3: Explicitly report status_code=9 (TIME_LIMIT) runs
+        timeout_runs = failed[failed["status_code"] == 9]
+        if not timeout_runs.empty:
+            print(f"  (Catatan: {len(timeout_runs)} diantaranya adalah run TIME_LIMIT (timeout) — data fase parsial diabaikan)")
         print()
     df = df[df["status_code"] == 2]
 
-    # Pisahkan run Kondisi A yang mengalami CFS throttling (tidak dikeluarkan dari utama)
-    df, flagged_df = separate_flagged_runs(df)
+    # Identifikasi run Kondisi A yang mengalami CFS throttling (tidak dikeluarkan dari utama)
+    flagged_df = identify_throttled_runs(df)
     if not flagged_df.empty:
         print(f"INFO: {len(flagged_df)} run Kondisi A mengalami CFS throttling "
               f"(throttled_usec_delta > 0) — TETAP masuk analisis utama, "
