@@ -72,7 +72,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "instance": Path(data.get("instance", "")).stem if data.get("instance") else None,
             "status_code": data.get("status_code"),
             "crossover_seconds": data.get("crossover_seconds"),
-            "barrier_seconds": data.get("barrier_seconds"),
+            "barrier_iteration_seconds": data.get("barrier_iteration_seconds") or data.get("barrier_seconds"),
             "wall_clock_total_seconds": wall_clock,
             "barrier_iter_count": data.get("barrier_iter_count"),
             # Metrik UTAMA untuk RQ2 — sudah diselaraskan ke rentang waktu fase
@@ -184,6 +184,9 @@ def run_mann_whitney_with_bonferroni(df: pd.DataFrame) -> dict:
             print(f"  {instance}: data tidak cukup untuk uji (n_none={len(group_none)}, n_static={len(group_static)})")
             continue
 
+        if len(group_none) < 8 or len(group_static) < 8:
+            print(f"  [PERINGATAN] {instance}: jumlah sampel di bawah batas validitas metodologi (n_none={len(group_none)}, n_static={len(group_static)} < 8-10)")
+
         u_stat, p_value = stats.mannwhitneyu(group_none, group_static, alternative="two-sided")
         median_diff = group_none.median() - group_static.median()
         pct_reduction = (median_diff / group_none.median() * 100) if group_none.median() else float("nan")
@@ -284,7 +287,7 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
             rho, p_value = stats.spearmanr(
                 clean_ipc["ipc"], clean_ipc["crossover_seconds"]
             )
-            # Ekspektasi: rho NEGATIF (IPC tinggi -> crossover cepat)
+             # Ekspektasi: rho NEGATIF (IPC tinggi -> crossover time lebih rendah)
             direction = "negatif (sesuai ekspektasi)" if rho < 0 else "positif (periksa!)"
             # Issue 2: Inline caveat warning that IPC is a whole-process metric
             print(f"  [IPC]            Spearman's rho = {rho:.4f}, p = {p_value:.4f}, n = {len(clean_ipc)} [{direction}] (WHOLE-PROCESS metric — see §VIII caveat)")
@@ -294,7 +297,7 @@ def run_correlation_analysis_per_condition(df: pd.DataFrame):
         " DI DALAM kondisi yang sama -> gangguan penjadwalan atau miss cache lebih"
         " tinggi berasosiasi dengan crossover time lebih lambat.\n"
         "  rho negatif untuk IPC -> IPC lebih tinggi berasosiasi dengan crossover"
-        " time lebih cepat.\n"
+        " time lebih singkat (cepat).\n"
         "  Ketiga proksi yang konsisten arahnya memperkuat plausibilitas mekanisme"
         " migrasi thread (bukan membuktikan kausalitas — lihat Keterbatasan Metodologis)."
     )
@@ -344,14 +347,17 @@ def check_barrier_stability(df: pd.DataFrame):
 
     for instance in df["instance"].unique():
         subset = df[df["instance"] == instance]
-        group_none = subset[subset["condition"] == "none"]["barrier_seconds"].dropna()
-        group_static = subset[subset["condition"] == "static"]["barrier_seconds"].dropna()
+        group_none = subset[subset["condition"] == "none"]["barrier_iteration_seconds"].dropna()
+        group_static = subset[subset["condition"] == "static"]["barrier_iteration_seconds"].dropna()
 
         group_none_iters = subset[subset["condition"] == "none"]["barrier_iter_count"].dropna()
         group_static_iters = subset[subset["condition"] == "static"]["barrier_iter_count"].dropna()
 
         if len(group_none) < 3 or len(group_static) < 3:
             continue
+
+        if len(group_none) < 8 or len(group_static) < 8:
+            print(f"  [PERINGATAN] {instance}: jumlah sampel di bawah batas validitas metodologi (n_none={len(group_none)}, n_static={len(group_static)} < 8-10) untuk stabilitas barrier")
 
         u_stat, p_value = stats.mannwhitneyu(group_none, group_static, alternative="two-sided")
         
@@ -366,7 +372,7 @@ def check_barrier_stability(df: pd.DataFrame):
             f"  {instance}:\n"
             f"    Waktu Barrier:   median_none={group_none.median():.4f}s, median_static={group_static.median():.4f}s, p={p_value:.4f}\n"
             f"                    ({'TIDAK signifikan -> barrier stabil, baik' if p_value > ALPHA else 'SIGNIFIKAN -> periksa confounding!'})\n"
-            f"                    (NOTE: barrier_seconds mengecualikan waktu presolve/startup Gurobi)\n"
+            f"                    (NOTE: barrier_iteration_seconds mengecualikan waktu presolve/startup Gurobi)\n"
             f"    Iterasi Barrier: median_none={iter_none_med:.0f}, median_static={iter_static_med:.0f}, beda={iter_diff_pct:.2f}%\n"
             f"                    ({'✓ KONSISTEN (beda < 5%)' if iter_diff_pct < 5.0 else '⚠ BEDA (beda >= 5%)'})\n"
         )
