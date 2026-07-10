@@ -9,7 +9,7 @@ WORKDIR /app
 
 COPY scripts/run_solver.py /app/run_solver.py
 
-# Direktori untuk benchmark instance (di-mount via ConfigMap/PVC saat runtime)
+# Direktori untuk benchmark instance (di-mount via hostPath ke tmpfs saat runtime)
 RUN mkdir -p /app/instances /app/results
 
 ENTRYPOINT ["python", "/app/run_solver.py"]

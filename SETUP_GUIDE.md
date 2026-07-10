@@ -76,6 +76,11 @@ gcloud compute instances create crossover-experiment-vm \
 
 ### 1.3.1 Kontingensi Option 2 — SMT Dinonaktifkan (c2-standard-8)
 
+> [!WARNING]
+> **Opsi ini tidak dapat dijalankan secara utuh (dead-end / tidak recommended)**:
+> Menonaktifkan SMT pada `c2-standard-8` hanya menyisakan 4 vCPU. Karena eksperimen membutuhkan minimal 5 vCPU (4 solver + 1 reserved), skrip `characterize_topology.py` dan `render_kubelet_configs.py` akan menolak opsi ini (`reserved_cpu` bernilai `null`).
+> Bagian ini didokumentasikan hanya untuk kelengkapan dan dokumentasi historis perancangan proposal. Jika Anda ingin mematikan SMT, silakan gunakan **Option 3 (c2-standard-16)** di bawah.
+
 **Jalankan ini HANYA jika** karakterisasi topologi di §​1.7 menghasilkan
 `infra/topology-decision.txt` berisi `option2`. Hapus VM yang ada, lalu buat
 ulang dengan `--threads-per-core=1`:

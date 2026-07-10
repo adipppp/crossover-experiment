@@ -23,7 +23,6 @@ crossover-experiment/
 ├── manifests/
 │   ├── 00-namespace.yaml             # Namespace terisolasi untuk eksperimen
 │   ├── 01-secret-template.yaml       # Template struktur Secret
-│   ├── 02-storage.yaml               # PV/PVC hostPath untuk instance & hasil
 │   └── pod-template.yaml             # Template Pod, di-render run_experiment.sh
 ├── kubelet-configs/
 │   ├── condition-A-none.yaml         # TEMPLATE Kondisi A (belum berisi reservedSystemCPUs)
@@ -73,6 +72,8 @@ crossover-experiment/
 - **Isolasi core Kubernetes ≠ isolasi kernel penuh.** `reservedSystemCPUs` membatasi scheduler decisions, bukan timer interrupt atau softirq yang tetap bisa membebani core "eksklusif". Ini merepresentasikan skenario cloud-native nyata di mana peneliti tidak memiliki akses ke `isolcpus`/`nohz_full`.
 - **Proksi, bukan pengukuran langsung migrasi.** Involuntary context switches mengindikasikan preemption CFS, bukan perpindahan core secara spesifik. Cache-miss rate dan IPC dari `perf stat` digunakan sebagai triangulasi hardware-level. Validitas PMU dikonfirmasi oleh `validate_pmu_fidelity.py` sebelum eksperimen; jika NO-GO, hanya context switches yang dilaporkan.
 - **Hubungan asosiatif, bukan kausal.** Analisis mediasi formal (bootstrapped indirect effect) tidak dilakukan — diklasifikasikan sebagai penelitian lanjutan.
+- **Cakupan Stabilitas Barrier (RQ3) terbatas.** Metrik `barrier_iteration_seconds` yang diukur secara operasional mengecualikan waktu presolve/startup Gurobi sebelum iterasi pertama barrier berjalan.
+- **Auto-Resume dan noise temporal.** Fitur `AUTO-RESUME` pada `run_experiment.sh` membantu memulihkan kegagalan pod, tetapi restart proses otomatis dapat menginduksi cache flushes/timing gaps yang dapat memengaruhi presisi durasi temporal repetisi berikutnya. Hal ini didokumentasikan untuk transparansi reproducibility.
 
 ## Yang Perlu Anda Lakukan Manual
 
