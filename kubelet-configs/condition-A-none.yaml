@@ -62,4 +62,3 @@ systemReserved:
 kubeReserved:
   cpu: "500m"
   memory: "512Mi"
-reservedSystemCPUs: "__RESERVED_SYSTEM_CPUS__"

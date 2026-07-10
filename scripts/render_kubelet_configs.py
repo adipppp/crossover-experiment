@@ -140,13 +140,23 @@ def cross_validate(decision: str, report: dict) -> list[str]:
     return warnings
 
 
-def render_template(template_path: Path, reserved_cpu_id: int) -> str:
-    """Baca template, ganti placeholder, kembalikan string hasil render."""
+def render_template(template_path: Path, reserved_cpu_id: int, expect_placeholder: bool = True) -> str:
+    """Baca template, ganti placeholder jika diharapkan, kembalikan string hasil render."""
     if not template_path.exists():
         print(f"ERROR: Template tidak ditemukan: {template_path}", file=sys.stderr)
         sys.exit(1)
 
     content = template_path.read_text(encoding="utf-8")
+
+    if not expect_placeholder:
+        if PLACEHOLDER in content:
+            print(
+                f"ERROR: Placeholder '{PLACEHOLDER}' ditemukan di {template_path.name} "
+                f"meskipun tidak diharapkan untuk policy 'none'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return content
 
     if PLACEHOLDER not in content:
         print(
@@ -293,11 +303,15 @@ def main():
     for policy, filename in TEMPLATE_FILES.items():
         template_path = configs_dir / filename
         print(f"  [{filename}]")
-        rendered = render_template(template_path, reserved_cpu)
+        expect_placeholder = (policy != "none")
+        rendered = render_template(template_path, reserved_cpu, expect_placeholder=expect_placeholder)
         rendered = add_render_header(rendered, decision, reserved_cpu,
                                      solver_cpus, generated_at)
         rendered_outputs[filename] = rendered
-        print(f"    reservedSystemCPUs : {reserved_cpu}  ✓")
+        if expect_placeholder:
+            print(f"    reservedSystemCPUs : {reserved_cpu}  ✓")
+        else:
+            print(f"    reservedSystemCPUs : tidak ada (sesuai proposal)  ✓")
         print(f"    cpuManagerPolicy   : {'none' if policy == 'none' else 'static'}  ✓")
         print(f"    full-pcpus-only    : tidak ada (sesuai proposal)  ✓")
         print()
