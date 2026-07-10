@@ -12,4 +12,11 @@ COPY scripts/run_solver.py /app/run_solver.py
 # Direktori untuk benchmark instance (di-mount via hostPath ke tmpfs saat runtime)
 RUN mkdir -p /app/instances /app/results
 
+# Buat group dan user non-root solver yang cocok dengan securityContext di manifests/pod-template.yaml
+RUN groupadd -g 1002 solver && \
+    useradd -u 1001 -g 1002 -m solver && \
+    chown -R solver:solver /app
+
+USER solver
+
 ENTRYPOINT ["python", "/app/run_solver.py"]

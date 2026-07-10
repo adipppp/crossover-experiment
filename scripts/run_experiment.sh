@@ -218,7 +218,14 @@ for instance in "${INSTANCES[@]}"; do
     done
 
     # Pin metrics collector to reserved core to prevent interference with solver
-    RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null || echo "0")
+    RESERVED_CPU=""
+    if [ -f "$SCRIPT_DIR/../infra/topology-report.json" ]; then
+      RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null)
+    fi
+    if [ -z "$RESERVED_CPU" ]; then
+      echo "WARNING: Gagal membaca reserved_cpu dari topology-report.json. Menggunakan fallback CPU 0 untuk metrics collector!" >&2
+      RESERVED_CPU="0"
+    fi
 
     metrics_output="$RESULTS_DIR/${run_id}.sysmetrics.json"
     taskset -c "$RESERVED_CPU" python3 "$SCRIPT_DIR/collect_system_metrics.py" \
