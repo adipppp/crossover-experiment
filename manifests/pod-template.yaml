@@ -33,17 +33,17 @@ spec:
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
   initContainers:
     - name: stage-instance
-      image: alpine:3.19
+      image: alpine:3.19.1@sha256:c5b1261d6d8e4e8ad55eaac114e35cc425a755d9d7990494b9ff363914a84d43
       command:
         - sh
         - -c
         - "cp /mnt/host-instances/__INSTANCE_FILE__ /app/instances/__INSTANCE_FILE__"
       resources:
         requests:
-          cpu: "1"
+          cpu: "500m"
           memory: "2Gi"
         limits:
-          cpu: "1"
+          cpu: "500m"
           memory: "2Gi"
       volumeMounts:
         - name: host-instances

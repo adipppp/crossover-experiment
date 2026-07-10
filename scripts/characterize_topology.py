@@ -31,9 +31,9 @@ from pathlib import Path
 
 SOLVER_THREADS = 4  # resources.requests.cpu = resources.limits.cpu = 4 (Guaranteed QoS)
 RESERVED_CPUS  = 1  # reservedSystemCPUs: satu core untuk daemon Kubernetes dan sistem
-# Catatan: Init container `stage-instance` meminta cpu: 1 (Guaranteed QoS), namun karena
-# init container berjalan secara sekuensial sebelum container solver, Kubernetes akan memakai
-# cpusets secara bergantian/berbagi. Sehingga kebutuhan kapasitas total tetap 5 vCPUs.
+# Catatan: Init container `stage-instance` meminta cpu: 500m (Guaranteed QoS tapi non-integer),
+# sehingga tidak dialokasikan core eksklusif oleh CPU Manager dan tidak mengganggu alokasi eksklusif.
+# Kebutuhan kapasitas total core eksklusif tetap 5 vCPUs (4 solver + 1 reserved).
 CPUS_NEEDED    = SOLVER_THREADS + RESERVED_CPUS  # = 5
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -525,7 +525,7 @@ def main():
     for opt_key in ("option1", "option2", "option3"):
         opt    = options[opt_key]
         viable = opt.get("viable")
-        label  = labels.get(str(viable) if not isinstance(viable, bool) else viable, str(viable))
+        label  = labels.get(viable, str(viable))
         print(f"\n  [{opt_key.upper()}] {label}")
         print(f"  {opt.get('rationale', '')}")
         if (opt_key == "option1" or opt_key == "option3") and opt.get("viable") is True:
