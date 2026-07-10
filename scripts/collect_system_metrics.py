@@ -217,27 +217,38 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
     samples.sort(key=lambda x: x[0])
 
     # Cari sample TERAKHIR dengan timestamp <= crossover_start_epoch
+    idx_start = None
     count_at_start = None
-    for ts, count in samples:
+    for i, (ts, count) in enumerate(samples):
         if ts <= crossover_start_epoch:
+            idx_start = i
             count_at_start = count
         else:
             break
 
     # Cari sample TERAKHIR dengan timestamp <= crossover_end_epoch
+    idx_end = None
     count_at_end = None
-    for ts, count in samples:
+    for i, (ts, count) in enumerate(samples):
         if ts <= crossover_end_epoch:
+            idx_end = i
             count_at_end = count
 
-    if count_at_start is None or count_at_end is None:
+    if idx_start is None or idx_end is None:
         print(
             "WARNING: Gagal menemukan sampel metrics sebelum/sesudah crossover. Delta tidak presisi.",
             file=sys.stderr,
         )
         return None
 
-    return count_at_end - count_at_start
+    # Jika idx_start == idx_end, crossover fase berjalan sangat cepat (< interval polling)
+    # sehingga count_at_start dan count_at_end diambil dari index sampel yang sama.
+    crossover_too_short_warning = (idx_start == idx_end)
+
+    return {
+        "delta": count_at_end - count_at_start,
+        "crossover_too_short_warning": crossover_too_short_warning,
+    }
 
 
 def parse_perf_stat(log_path: Path) -> dict:
@@ -357,7 +368,12 @@ def main():
     while not solver_result_path.exists() and time.time() < deadline:
         time.sleep(0.05)
 
-    crossover_phase_delta = align_samples_to_crossover_phase(samples, solver_result_path)
+    align_info = align_samples_to_crossover_phase(samples, solver_result_path)
+    crossover_phase_delta = None
+    crossover_too_short_warning = False
+    if align_info is not None:
+        crossover_phase_delta = align_info["delta"]
+        crossover_too_short_warning = align_info["crossover_too_short_warning"]
 
     whole_process_delta = (samples[-1][1] - samples[0][1]) if len(samples) >= 2 else None
 
@@ -389,6 +405,7 @@ def main():
         # phase_timing dari run_solver.py. Gunakan field ini di analisis,
         # BUKAN involuntary_ctxt_switches_delta_whole_process.
         "involuntary_ctxt_switches_delta_crossover_phase_only": crossover_phase_delta,
+        "crossover_too_short_warning": crossover_too_short_warning,
         # Disimpan sebagai pembanding/konteks saja — TIDAK dipakai untuk RQ2
         # karena mencampur aktivitas presolve+barrier+crossover sekaligus.
         "involuntary_ctxt_switches_delta_whole_process": whole_process_delta,
