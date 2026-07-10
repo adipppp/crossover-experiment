@@ -66,9 +66,14 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         blk_match = re.search(r"-blk(\d+)-run", run_id_str)
         block = int(blk_match.group(1)) if blk_match else 1
 
+        # Parse nomor run untuk pengurutan numerik temporal yang presisi
+        rep_match = re.search(r"-run(\d+)", run_id_str)
+        rep_index = int(rep_match.group(1)) if rep_match else 0
+
         rows.append({
             "run_id": run_id_str,
             "block": block,
+            "rep_index": rep_index,
             "condition": data.get("condition"),
             "instance": Path(data.get("instance", "")).stem if data.get("instance") else None,
             "status_code": data.get("status_code"),
@@ -319,7 +324,7 @@ def check_warming_trend(df: pd.DataFrame):
                     (df["instance"] == instance) &
                     (df["condition"] == condition) &
                     (df["block"] == block)
-                ].sort_values("run_id")
+                ].sort_values("rep_index")
                 if len(subset) < 5:
                     continue
                 rho, p = stats.spearmanr(
