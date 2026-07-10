@@ -8,6 +8,17 @@ memonitor metrik sistem sebuah proses container Kubernetes selama solve berjalan
   - CFS throttling statistics (dari cpu.stat cgroup v2 container) — tetap
     whole-process, karena tujuannya memverifikasi throttling kuota CPU secara
     umum, bukan spesifik per fase.
+  - Hardware performance counters (cache misses, IPC, cycles, instructions) — diukur
+    secara whole-process via `perf stat -p <pid>` karena keterbatasan teknis perf stat
+    yang tidak mendukung pemotongan/pemberhentian per fase secara andal tanpa overhead.
+    
+    CATATAN METODOLOGI (Poin 4 Code Review):
+    Terdapat kontradiksi internal di proposal Subbab "Prosedur Pengukuran" (HW counters
+    diklaim whole-process karena limitasi perf stat, namun di kalimat akhir diklaim
+    semua metrik pendukung hanya diukur pada fase crossover). Kode ini mengimplementasikan
+    pendekatan whole-process yang lebih rasional secara teknis untuk PMU/HW counters,
+    sementara menyelaraskan context switches ke fase crossover saja. Kontradiksi ini
+    harus direkonsiliasi pada laporan akhir/skripsi tertulis.
 
 Dipanggil oleh scripts/run_experiment.sh secara paralel (background) dengan
 run_solver.py, lalu berhenti otomatis begitu proses container exit.

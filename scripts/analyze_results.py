@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -72,7 +73,7 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "instance": Path(data.get("instance", "")).stem if data.get("instance") else None,
             "status_code": data.get("status_code"),
             "crossover_seconds": data.get("crossover_seconds"),
-            "barrier_iteration_seconds": data.get("barrier_iteration_seconds") or data.get("barrier_seconds"),
+            "barrier_iteration_seconds": data.get("barrier_iteration_seconds"),
             "wall_clock_total_seconds": wall_clock,
             "barrier_iter_count": data.get("barrier_iter_count"),
             # Metrik UTAMA untuk RQ2 — sudah diselaraskan ke rentang waktu fase
@@ -485,12 +486,13 @@ def check_order_effect(df: pd.DataFrame) -> bool:
         print("    Median dari 30 repetisi gabungan (Blok 1 + Blok 2) digunakan")
         print("    sebagai hasil utama pada RQ1–RQ4.")
     else:
-        print("  ⚠  KEPUTUSAN: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
-        print("    Hasil per blok dilaporkan TERPISAH selain gabungan.")
-        print("    Pertimbangkan model mixed-effects (blok sebagai random effect)")
-        print("    untuk estimasi efek kondisi yang tidak bias oleh urutan.")
-        print("    (Analisis mixed-effects tidak diimplementasikan di skrip ini —")
-        print("     diklasifikasikan sebagai penelitian lanjutan per proposal.)")
+        print("  ❌ ERROR / KEPUTUSAN: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
+        print("    Sesuai proposal Subbab 'Prosedur Eksperimen', hasil crossover time")
+        print("    harus dianalisis kembali menggunakan model mixed-effects dengan blok sebagai")
+        print("    random effect. Analisis mixed-effects tersebut belum diimplementasikan di skrip ini.")
+        print("    Proses dihentikan secara paksa (hard stop) untuk mencegah penggunaan data gabungan yang bias.")
+        print()
+        sys.exit(1)
     print()
     return both_non_sig
 
@@ -626,11 +628,7 @@ def main():
     # Pemeriksaan efek urutan (Phase 4 — block counterbalancing)
     # Harus dijalankan SEBELUM analisis utama untuk menentukan apakah
     # hasil 30 rep digabung atau dilaporkan per blok.
-    both_blocks_ok = check_order_effect(df)
-    if not both_blocks_ok:
-        print("  CATATAN: Analisis RQ1-RQ4 di bawah tetap menggunakan data GABUNGAN")
-        print("  (30 rep). Hasil per blok tersedia di combined_results.csv kolom 'block'.")
-        print()
+    check_order_effect(df)
 
     check_warming_trend(df)
 

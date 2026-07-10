@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """
 validate_pmu_fidelity.py — Validasi fidelitas hardware performance counter (PMU)
 pada VM cloud sebelum eksperimen utama dijalankan.
@@ -25,6 +24,8 @@ Output:
     infra/pmu-validation-report.json
     Kode exit: 0 = GO, 1 = NO-GO, 2 = error infrastruktur
 """
+
+from __future__ import annotations
 
 import argparse
 import json

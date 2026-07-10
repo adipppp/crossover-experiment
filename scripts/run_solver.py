@@ -293,8 +293,6 @@ def main():
         # diambil dari callback_summary, BUKAN dari log_derived.
         result["crossover_seconds"] = callback_summary["crossover_duration_seconds_callback"]
         result["barrier_iteration_seconds"] = callback_summary["barrier_duration_seconds_callback"]
-        # Maintain old key for backward compatibility/historical logs
-        result["barrier_seconds"] = callback_summary["barrier_duration_seconds_callback"]
 
         # Peringatan jika kedua sumber pengukuran berbeda signifikan (>0.5s),
         # supaya anomali terlihat saat inspeksi hasil, bukan terkubur.
