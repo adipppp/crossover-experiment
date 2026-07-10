@@ -167,7 +167,12 @@ def parse_log_for_phase_split(log_path: str):
     yang lebih presisi di sekitar model.optimize().
     """
     if not Path(log_path).exists():
-        return {"barrier_end_time_log": None, "total_time_log": None, "barrier_iterations": None}
+        return {
+            "barrier_end_time_log": None,
+            "total_time_log": None,
+            "barrier_iterations": None,
+            "concurrent_crossover_detected": False,
+        }
 
     text = Path(log_path).read_text(errors="ignore")
 
@@ -182,10 +187,19 @@ def parse_log_for_phase_split(log_path: str):
     summary_pattern = re.search(r"Solved in (\d+) iterations and ([\d.]+) seconds", text)
     total_time_log = float(summary_pattern.group(2)) if summary_pattern else None
 
+    # Validasi crossover tunggal: periksa apakah ada indikator crossover paralel/concurrent
+    text_lower = text.lower()
+    concurrent_crossover_detected = (
+        "concurrent crossover" in text_lower or
+        "parallel crossover" in text_lower or
+        "concurrent barrier/crossover" in text_lower
+    )
+
     return {
         "barrier_end_time_log": barrier_end_time_log,
         "total_time_log": total_time_log,
         "barrier_iterations": barrier_iterations,
+        "concurrent_crossover_detected": concurrent_crossover_detected,
     }
 
 
@@ -207,6 +221,12 @@ def main():
     model = None
 
     try:
+        if not args.check:
+            # Hapus file log/json lama secara defensif untuk mencegah appending/polusi
+            Path(log_path).unlink(missing_ok=True)
+            if out_path:
+                out_path.unlink(missing_ok=True)
+
         env.setParam("LogFile", log_path)
         
         # Atur parameter solver yang wajib (juga divalidasi pada --check)
@@ -264,6 +284,9 @@ def main():
         callback_summary = phase_cb.summary(model.Runtime)
         log_derived = parse_log_for_phase_split(log_path)  # cross-check sekunder, granularitas 1 detik
 
+        if log_derived.get("concurrent_crossover_detected"):
+            print("WARNING: Terdeteksi crossover concurrent/parallel aktif di log Gurobi!", file=sys.stderr)
+
         result = {
             "run_id": args.run_id,
             "condition": args.condition,
@@ -285,6 +308,7 @@ def main():
             # dipakai untuk sanity-check, bukan metrik utama dalam analisis).
             "log_derived_crosscheck": log_derived,
             "timestamp_unix": time.time(),
+            "concurrent_crossover_detected": log_derived.get("concurrent_crossover_detected", False),
             # Metadata tambahan (sesuai proposal §II)
             "host_uptime_seconds": get_host_uptime(),
         }
