@@ -410,6 +410,10 @@ sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 
 > ⚠️ **PENTING — Konfigurasi Kubelet Eksperimen:**
 > Untuk single-node eksperimen ini, kita menyalin file konfigurasi Kubelet secara langsung ke `/var/lib/kubelet/config.yaml`. Karena tidak ada rencana melakukan upgrade cluster (`kubeadm upgrade`), cara langsung ini aman dan praktis.
+>
+> **Batasan K8s API pada Kondisi A:** Kubelet secara hardcode menolak array `reservedSystemCPUs` yang tidak kosong apabila `cpuManagerPolicy` di-set ke `none`. Oleh karena itu, *template* maupun config *rendered* untuk Kondisi A sama sekali tidak memuat field ini. Ini adalah kebutuhan teknis dari sistem (K8s API constraint), bukan *bug* implementasi.
+>
+> **Penolakan Mutating Webhooks/CRD:** Infrastruktur eksperimen ini secara sadar mempertahankan primitif Kubernetes bawaan (*vanilla* Pods dan KubeletConfig) demi meminimalisasi *noise* kontrol pada node. Kami menolak secara teknis penggunaan *Mutating Webhooks* atau *Custom Resource Definitions* (CRD) tambahan karena dapat mengintervensi CPU *scheduling decisions* dan mengompromikan validitas *baseline*.
 
 ```bash
 # Gunakan konfigurasi yang sudah di-RENDER oleh render_kubelet_configs.py (§1.7.5),
