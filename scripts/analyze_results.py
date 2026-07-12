@@ -494,16 +494,37 @@ def check_order_effect(df: pd.DataFrame) -> bool:
         print("  ⛔ PERINGATAN KRITIS: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
         print()
         print("  ══════════════════════════════════════════════════════════════════")
-        print("  SESUAI PROPOSAL: Mengalihkan pipeline ke Aligned-Rank Transform (ART) Fallback.")
-        print("  Karena jumlah blok hanya 2 (N=2 per instance per kondisi), model mixed-effects")
-        print("  berbasis Random Intercepts (mixedlm) akan mengalami degenerasi (singular fit).")
-        print("  Sebagai gantinya, pipeline akan menggunakan Aligned-Rank Transform non-parametrik.")
-        print("  Fallback ini meng-overwrite dictionary mw_results agar pipeline hilir berlanjut.")
+        print("  SESUAI PROPOSAL: hasil harus dianalisis ulang menggunakan model")
+        print("  mixed-effects dengan blok sebagai random effect.")
+        print("  MIXED-EFFECTS MODEL BELUM DIIMPLEMENTASIKAN — lihat TODO di bawah.")
+        print()
+        print("  FALLBACK DARURAT: Analisis berikut DILANJUTKAN dengan DATA GABUNGAN")
+        print("  (semua blok sekaligus), NAMUN hasil ini HARUS ditandai BIAS POTENSIAL")
+        print("  di laporan akhir. Laporkan temuan ini secara eksplisit di Subbab")
+        print("  'Keterbatasan Metodologis'.")
         print("  ══════════════════════════════════════════════════════════════════")
         print()
-        
-        # Pengecekan ART Placeholder - Ini akan memicu eksekusi khusus di pemanggil (main logic)
-        # Secara fungsional akan dikembalikan ke run_mann_whitney_with_bonferroni atau diproses via ART.
+        print("  ANALISIS PER BLOK TERPISAH (informatif, sesuai Subbab 'Prosedur Eksperimen'):")
+        for blok_num in [1, 2]:
+            blok_label = "A→B (Blok 1)" if blok_num == 1 else "B→A (Blok 2)"
+            print(f"\n  --- Blok {blok_num} ({blok_label}) ---")
+            for condition in ["none", "static"]:
+                grp = df[(df["condition"] == condition) & (df["block"] == blok_num)]["crossover_seconds"].dropna()
+                label_cond = "A (none)" if condition == "none" else "B (static)"
+                if len(grp) >= 1:
+                    print(
+                        f"    Kondisi {label_cond}: median={grp.median():.4f}s, "
+                        f"IQR=[{grp.quantile(0.25):.4f}, {grp.quantile(0.75):.4f}], n={len(grp)}"
+                    )
+                else:
+                    print(f"    Kondisi {label_cond}: tidak ada data (n=0)")
+        print()
+        print("  TODO (sebelum submission): implementasikan mixed-effects model dengan:")
+        print("    from statsmodels.formula.api import mixedlm")
+        print("    # model = mixedlm('crossover_seconds ~ condition', df,")
+        print("    #                 groups=df['block']).fit()")
+        print("  Atau alternatif non-parametrik: Friedman test / Aligned-Rank Transform.")
+        print()
 
     print()
     return both_non_sig
@@ -637,22 +658,15 @@ def main():
     n_instances = df["instance"].nunique()
     alpha_corrected = ALPHA / n_instances if n_instances > 0 else ALPHA
 
+    # Pemeriksaan efek urutan (Phase 4 — block counterbalancing)
+    # Harus dijalankan SEBELUM analisis utama untuk menentukan apakah
+    # hasil 30 rep digabung atau dilaporkan per blok.
+    check_order_effect(df)
+
     check_warming_trend(df)
 
     summarize(df)
-    
-    no_order_effect = check_order_effect(df)
     mw_results = run_mann_whitney_with_bonferroni(df)
-    
-    if not no_order_effect:
-        # Patching structural (ART fallback simulation) - overwriting p_raw
-        print("  [ART FALLBACK PATCH] Mengganti p_raw di mw_results dengan nilai penyesuaian (dummy implementation for control flow).")
-        for inst in mw_results:
-            old_p = mw_results[inst]["p_raw"]
-            new_p = min(1.0, old_p * 1.05)
-            mw_results[inst]["p_raw"] = new_p # ART adjustment simulated
-            mw_results[inst]["p_adjusted"] = True
-            print(f"    -> Instance {inst}: p_raw disesuaikan dari {old_p:.4f} menjadi {new_p:.4f} (signifikansi tabel akhir dapat berubah).")
 
     # Uji sensitivitas throttling (Phase 5 — sesuai proposal RQ1)
     run_throttling_sensitivity_check(df, mw_results, alpha_corrected)
