@@ -240,12 +240,17 @@ Jika memilih Option 2 atau Option 3, hentikan proses ini, buat ulang VM sesuai
 #### 1.7.4 Validasi fidelitas hardware performance counter (PMU)
 
 ```bash
-python3 scripts/validate_pmu_fidelity.py
+# WAJIB dijalankan dengan sudo — perf stat memerlukan elevated privilege
+# pada VM cloud (kernel.perf_event_paranoid). Tanpa sudo, skrip dapat
+# mengembalikan verdict NO-GO palsu (false negative) meskipun PMU
+# sebenarnya bisa diakses, karena pengumpulan data utama (collect_system_metrics.py)
+# juga dijalankan dengan sudo.
+sudo python3 scripts/validate_pmu_fidelity.py
 
 ```
 
 Skrip mengompilasi micro-benchmark, menjalankan dua pola akses memori yang
-kontras di bawah `perf stat`, dan mengevaluasi go/no-go. Hasilnya tersimpan
+kontras di bawah `sudo perf stat`, dan mengevaluasi go/no-go. Hasilnya tersimpan
 di `infra/pmu-validation-report.json`.
 
 - **Verdict GO / DEGRADED:** lanjutkan ke §​1.7.5. Metrik PMU valid.

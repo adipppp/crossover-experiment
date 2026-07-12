@@ -88,8 +88,11 @@ def check_prerequisites():
         sys.exit(2)
 
     # Periksa apakah perf dapat mengakses PMU (bukan hanya tersedia)
+    # Gunakan sudo agar konsisten dengan run_perf_stat() — tanpa sudo,
+    # mungkin mendapatkan "Permission denied" dari kernel.perf_event_paranoid
+    # meskipun PMU sebenarnya bisa diakses dengan elevated privilege.
     r = subprocess.run(
-        ["perf", "stat", "-e", "cache-misses", "sleep", "0"],
+        ["sudo", "perf", "stat", "-e", "cache-misses", "sleep", "0"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     if r.returncode != 0 and "<not supported>" not in r.stderr and "Permission" in r.stderr:
@@ -125,9 +128,18 @@ def run_perf_stat(bin_path: Path, mode: str) -> dict:
     Jalankan perf stat pada satu mode ("high" atau "low").
     Kembalikan dict {event_name: value_float | None}.
     None berarti counter tidak tersedia (<not supported>).
+
+    CATATAN: perf stat dijalankan dengan sudo agar level privilege konsisten
+    dengan collect_system_metrics.py (yang menggunakan sudo perf stat -p <pid>).
+    Ini penting karena kernel.perf_event_paranoid pada VM cloud sering memerlukan
+    elevated privilege — tanpa sudo, verdict GO/NO-GO bisa menjadi false NO-GO
+    semata karena kurang privilege, padahal PMU sebenarnya bisa diakses dengan benar.
+    Pastikan skrip ini dijalankan dari akun yang memiliki sudo tanpa password untuk perf,
+    atau jalankan dengan: sudo python3 scripts/validate_pmu_fidelity.py
     """
     cmd = (
-        ["perf", "stat",
+        ["sudo", "env", "LC_ALL=C",
+         "perf", "stat",
          "-x,",                           # CSV output, delimiter ","
          "-e", ",".join(PERF_EVENTS),
          str(bin_path), mode]
