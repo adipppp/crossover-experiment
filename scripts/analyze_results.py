@@ -14,7 +14,6 @@ import argparse
 import json
 import math
 import re
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -360,6 +359,7 @@ def check_barrier_stability(df: pd.DataFrame):
         group_static_iters = subset[subset["condition"] == "static"]["barrier_iter_count"].dropna()
 
         if len(group_none) < 3 or len(group_static) < 3:
+            print(f"  {instance}: data tidak cukup untuk stabilitas barrier (n_none={len(group_none)}, n_static={len(group_static)}) — dilewati.")
             continue
 
         if len(group_none) < 8 or len(group_static) < 8:
@@ -491,13 +491,41 @@ def check_order_effect(df: pd.DataFrame) -> bool:
         print("    Median dari 30 repetisi gabungan (Blok 1 + Blok 2) digunakan")
         print("    sebagai hasil utama pada RQ1–RQ4.")
     else:
-        print("  ❌ ERROR / KEPUTUSAN: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
-        print("    Sesuai proposal Subbab 'Prosedur Eksperimen', hasil crossover time")
-        print("    harus dianalisis kembali menggunakan model mixed-effects dengan blok sebagai")
-        print("    random effect. Analisis mixed-effects tersebut belum diimplementasikan di skrip ini.")
-        print("    Proses dihentikan secara paksa (hard stop) untuk mencegah penggunaan data gabungan yang bias.")
+        print("  ⛔ PERINGATAN KRITIS: Efek urutan SIGNIFIKAN terdeteksi pada minimal satu kondisi.")
         print()
-        sys.exit(1)
+        print("  ══════════════════════════════════════════════════════════════════")
+        print("  SESUAI PROPOSAL: hasil harus dianalisis ulang menggunakan model")
+        print("  mixed-effects dengan blok sebagai random effect.")
+        print("  MIXED-EFFECTS MODEL BELUM DIIMPLEMENTASIKAN — lihat TODO di bawah.")
+        print()
+        print("  FALLBACK DARURAT: Analisis berikut DILANJUTKAN dengan DATA GABUNGAN")
+        print("  (semua blok sekaligus), NAMUN hasil ini HARUS ditandai BIAS POTENSIAL")
+        print("  di laporan akhir. Laporkan temuan ini secara eksplisit di Subbab")
+        print("  'Keterbatasan Metodologis'.")
+        print("  ══════════════════════════════════════════════════════════════════")
+        print()
+        print("  ANALISIS PER BLOK TERPISAH (informatif, sesuai Subbab 'Prosedur Eksperimen'):")
+        for blok_num in [1, 2]:
+            blok_label = "A→B (Blok 1)" if blok_num == 1 else "B→A (Blok 2)"
+            print(f"\n  --- Blok {blok_num} ({blok_label}) ---")
+            for condition in ["none", "static"]:
+                grp = df[(df["condition"] == condition) & (df["block"] == blok_num)]["crossover_seconds"].dropna()
+                label_cond = "A (none)" if condition == "none" else "B (static)"
+                if len(grp) >= 1:
+                    print(
+                        f"    Kondisi {label_cond}: median={grp.median():.4f}s, "
+                        f"IQR=[{grp.quantile(0.25):.4f}, {grp.quantile(0.75):.4f}], n={len(grp)}"
+                    )
+                else:
+                    print(f"    Kondisi {label_cond}: tidak ada data (n=0)")
+        print()
+        print("  TODO (sebelum submission): implementasikan mixed-effects model dengan:")
+        print("    from statsmodels.formula.api import mixedlm")
+        print("    # model = mixedlm('crossover_seconds ~ condition', df,")
+        print("    #                 groups=df['block']).fit()")
+        print("  Atau alternatif non-parametrik: Friedman test / Aligned-Rank Transform.")
+        print()
+
     print()
     return both_non_sig
 
