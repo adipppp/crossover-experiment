@@ -3,7 +3,7 @@
 # Hasil render tersimpan di kubelet-configs/rendered/condition-A-none.yaml.
 #
 # Placeholder yang diisi oleh render_kubelet_configs.py:
-#   __RESERVED_SYSTEM_CPUS__ : ID vCPU tunggal yang direservasi untuk daemon
+#   <Placeholder_RESERVED_SYSTEM_CPUS> : ID vCPU tunggal yang direservasi untuk daemon
 #                              sistem dan Kubernetes (ditentukan berdasarkan
 #                              topologi aktual VM — lihat infra/topology-report.json).
 apiVersion: kubelet.config.k8s.io/v1beta1

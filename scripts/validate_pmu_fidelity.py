@@ -504,7 +504,7 @@ def main():
         print("  Coba langkah di atas, lalu jalankan ulang.")
         print("  Jika tetap NO-GO, lanjutkan tanpa metrik PMU:")
         print("    Tetapkan keputusan ini secara eksplisit di laporan:")
-        print(f"    python3 -c \"")
+        print(f"    sudo python3 -c \"")
         print(f"      import json; r=json.load(open('{report_path}'));")
         print(f"      r['pmu_in_analysis']=False;")
         print(f"      json.dump(r, open('{report_path}','w'), indent=2)\"")

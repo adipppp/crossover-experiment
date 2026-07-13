@@ -120,7 +120,7 @@ check_pmu_verdict() {
     return
   fi
   local verdict
-  verdict=$(python3 -c "import json; print(json.load(open('$report'))['verdict'])" 2>/dev/null || echo "UNKNOWN")
+  verdict=$(sudo python3 -c "import json; print(json.load(open('$report'))['verdict'])" 2>/dev/null || echo "UNKNOWN")
   if [[ "$verdict" == "NO-GO" ]]; then
     echo ""
     echo "  ⚠  PMU verdict: NO-GO. Metrik PMU tidak valid pada VM ini."
