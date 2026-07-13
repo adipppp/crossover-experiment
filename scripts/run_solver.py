@@ -21,12 +21,13 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import gurobipy as gp
 from gurobipy import GRB
 
 
-def get_host_uptime() -> float | None:
+def get_host_uptime() -> Optional[float]:
     """Membaca status uptime host dari /proc/uptime."""
     try:
         with open("/proc/uptime", "r") as f:
