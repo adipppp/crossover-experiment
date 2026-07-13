@@ -184,16 +184,17 @@ def render_template(template_path: Path, reserved_cpu_id: int, expect_placeholde
 
 
 def add_render_header(rendered: str, decision: str, reserved_cpu: int,
-                      solver_cpus: list, generated_at: str) -> str:
+                      solver_cpus: list, generated_at: str, expect_placeholder: bool = True) -> str:
     """
     Tambahkan header komentar pada hasil render agar file rendered/
     self-documenting — jelas kapan di-render, dari keputusan apa, dan
     dengan CPU mana sebagai reserved.
     """
+    reserved_text = str(reserved_cpu) if expect_placeholder else "tidak ada (sesuai proposal)"
     header = (
         f"# RENDERED oleh render_kubelet_configs.py pada {generated_at}\n"
         f"# Keputusan topologi : {decision}\n"
-        f"# reservedSystemCPUs : {reserved_cpu}\n"
+        f"# reservedSystemCPUs : {reserved_text}\n"
         f"# Solver CPUs (info) : {solver_cpus}\n"
         f"# File ini BUKAN template — jangan edit placeholder di sini.\n"
         f"# Edit template di kubelet-configs/ lalu render ulang.\n"
@@ -306,7 +307,7 @@ def main():
         expect_placeholder = (policy != "none")
         rendered = render_template(template_path, reserved_cpu, expect_placeholder=expect_placeholder)
         rendered = add_render_header(rendered, decision, reserved_cpu,
-                                     solver_cpus, generated_at)
+                                     solver_cpus, generated_at, expect_placeholder)
         rendered_outputs[filename] = rendered
         if expect_placeholder:
             print(f"    reservedSystemCPUs : {reserved_cpu}  ✓")
