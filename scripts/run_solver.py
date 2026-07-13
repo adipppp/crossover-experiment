@@ -247,15 +247,6 @@ def main():
             if args.threads is not None:
                 env.setParam("Threads", args.threads)
 
-        # Validasi pre-flight terhadap tipe parameter dan batasan nilainya
-        try:
-            crossover_info = env.getParamInfo("Crossover")
-            min_val, max_val = crossover_info[3], crossover_info[4]
-            if not (min_val <= 4 <= max_val):
-                raise ValueError(f"Nilai 4 tidak didukung oleh parameter Crossover (range: [{min_val}, {max_val}])")
-        except gp.GurobiError as e:
-            raise ValueError(f"Gagal memvalidasi parameter Crossover: {e}")
-
         model = gp.read(args.instance, env=env)
 
         if args.check:
