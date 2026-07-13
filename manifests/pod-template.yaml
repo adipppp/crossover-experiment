@@ -33,7 +33,7 @@ spec:
   # agar Pod kedua kondisi konsisten berjalan di node yang identik.
   initContainers:
     - name: stage-instance
-      image: alpine:3.19.1@sha256:c5b1261d6d8e4e8ad55eaac114e35cc425a755d9d7990494b9ff363914a84d43
+      image: alpine:3.19.1
       command:
         - sh
         - -c
