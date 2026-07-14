@@ -38,7 +38,13 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         if not isinstance(data, dict) or "run_id" not in data or "condition" not in data or "instance" not in data:
             continue
 
-        sysmetrics_path = results_dir / f"{data['run_id']}.sysmetrics.json"
+        # Filter out contaminated smoke test files (e.g., -run1 suffix without leading zero)
+        _run_id = data.get("run_id", "")
+        if re.search(r"-run[0-9]$", _run_id):
+            print(f"Skipping contaminated smoke test: {json_path.name} (run_id={_run_id})")
+            continue
+
+        sysmetrics_path = results_dir / f"{_run_id}.sysmetrics.json"
         ctxt_delta_crossover_only = None
         ctxt_delta_whole_process = None
         throttled_usec_delta = None
@@ -560,8 +566,11 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
         print(f"  Run Kondisi A dengan missing_cgroup_snapshot: {n_missing} (tidak diketahui status throttling-nya)")
 
     if n_throttled == 0:
-        print("  Tidak ada run yang ter-throttle — sensitivity check tidak berlaku.")
-        print("  Throttling bukan faktor sama sekali pada dataset ini.")
+        print("  PERINGATAN: Seluruh run Kondisi A memiliki missing_cgroup_snapshot=True (100% gagal baca cpu.stat).")
+        print("  Throttled_usec_delta tidak dapat dihitung sama sekali akibat race condition cgroup —")
+        print("  snapshot 'after' dihapus oleh kubelet sebelum skrip metrik sempat membacanya.")
+        print("  Uji sensitivitas throttling TIDAK DAPAT dijalankan. Ini BUKAN bukti bahwa throttling = 0;")
+        print("  ini adalah keterbatasan pengukuran yang harus dicatat di bab Hasil/Keterbatasan.")
         print()
         return
 
@@ -603,6 +612,58 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
         print("  ⚠  TIDAK KONSISTEN: Verdict berubah setelah eksklusi run ter-throttle.")
         print("    Laporkan kedua hasil (semua data / setelah eksklusi) secara terpisah.")
         print("    Periksa run ter-throttle secara manual sebelum interpretasi akhir.")
+    print()
+
+
+def run_mannwhitney_context_switches(df: pd.DataFrame):
+    """
+    Uji konfirmatori RM2 — Mann-Whitney U langsung untuk involuntary context
+    switches antara Kondisi none vs static.
+    Ini adalah uji yang dijanjikan Rev3 Subbab 'Analisis Data' RM2 sebagai
+    'uji konfirmatori utama bagi RM2' terhadap H1a, namun tidak diimplementasikan
+    di script asli.
+    """
+    print("=" * 70)
+    print("UJI MANN-WHITNEY U: INVOLUNTARY CONTEXT SWITCHES")
+    print("(Uji konfirmatori RM2 — H1a: perbandingan langsung none vs static)")
+    print("=" * 70)
+
+    col = "involuntary_ctxt_switches_delta_whole_process"
+    if col not in df.columns:
+        print("  Kolom not found — skip.")
+        print()
+        return
+
+    # Per-instance
+    for instance in sorted(df["instance"].unique()):
+        sub = df[df["instance"] == instance]
+        g_none = sub[sub["condition"] == "none"][col].dropna()
+        g_static = sub[sub["condition"] == "static"][col].dropna()
+        if len(g_none) < 3 or len(g_static) < 3:
+            print(f"  {instance}: data tidak cukup (none_n={len(g_none)}, static_n={len(g_static)})")
+            continue
+        u_stat, p = stats.mannwhitneyu(g_none, g_static, alternative="two-sided")
+        med_none = g_none.median()
+        med_static = g_static.median()
+        ratio = med_static / med_none if med_none > 0 else float('inf')
+        print(f"  {instance:<20} none_med={med_none:>10.1f}  static_med={med_static:>10.1f}  "
+              f"ratio={ratio:>6.1f}x  U={u_stat:.0f}  p={p:.8f}")
+
+    # Gabungan semua instance
+    g_none_all = df[df["condition"] == "none"][col].dropna()
+    g_static_all = df[df["condition"] == "static"][col].dropna()
+    if len(g_none_all) >= 3 and len(g_static_all) >= 3:
+        u_stat_all, p_all = stats.mannwhitneyu(g_none_all, g_static_all, alternative="two-sided")
+        med_none_all = g_none_all.median()
+        med_static_all = g_static_all.median()
+        ratio_all = med_static_all / med_none_all if med_none_all > 0 else float('inf')
+        print(f"  {'Gabungan (n=' + str(len(g_none_all)) + ' vs ' + str(len(g_static_all)) + ')':<20} "
+              f"none_med={med_none_all:>10.1f}  static_med={med_static_all:>10.1f}  "
+              f"ratio={ratio_all:>6.1f}x  U={u_stat_all:.0f}  p={p_all:.8f}")
+
+    print()
+    print("  Interpretasi: Jika p < 0.05, H1a ditolak — ada perbedaan signifikan antara")
+    print("  none dan static. Arah rasio menunjukkan kondisi mana yang lebih tinggi.")
     print()
 
 
@@ -667,6 +728,7 @@ def main():
     run_throttling_sensitivity_check(df, mw_results, alpha_corrected)
 
     check_barrier_stability(df)
+    run_mannwhitney_context_switches(df)
     run_correlation_analysis_per_condition(df)
     run_effect_size_analysis(mw_results, alpha_corrected)
 
