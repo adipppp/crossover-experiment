@@ -660,28 +660,43 @@ kubectl uncordon crossover-experiment-vm
 
 ## Bagian 6 — Eksperimen penuh
 
-Ini adalah Blok 1 (urutan A→B). Blok 2 (urutan B→A, hari terpisah) akan
-diimplementasikan sebagai bagian dari Phase 4 (block counterbalancing).
-Sementara itu, jalankan Blok 1 terlebih dahulu:
+Skrip `run_full_experiment.sh` (Phase 4) mengorkestrasi eksekusi penuh secara
+otomatis, termasuk pergantian `cpuManagerPolicy` di tengah jalan (A→B pada
+Blok 1, B→A pada Blok 2).
 
+Jalankan eksperimen dalam **dua hari berbeda** untuk memenuhi syarat *block
+counterbalancing* pada metodologi Rev3:
+
+**Hari Pertama (Blok 1 — urutan A→B):**
 ```bash
-# Blok 1 — Urutan A→B
-
-# Kondisi A (baseline) — N=15, 4 vCPU sesuai proposal (requests=limits=4, Guaranteed QoS)
-bash scripts/run_experiment.sh none 15 4
-
-# Berpindah ke Kondisi B (perlakuan)
-bash scripts/switch_cpu_manager_policy.sh static
-
-# Kondisi B (perlakuan) — N=15, 4 vCPU
-bash scripts/run_experiment.sh static 15 4
-
+bash scripts/run_full_experiment.sh block1
 ```
 
-> **Catatan block counterbalancing:** Blok 2 (B→A) dijalankan di hari yang
-> berbeda untuk mengontrol variabel perancu temporal. Orkestrasi dua-blok
-> penuh — termasuk uji efek urutan Mann-Whitney U antar blok — akan tersedia
-> setelah Phase 4 (run_full_experiment.sh) diimplementasikan.
+> Skrip akan otomatis menjalankan Kondisi A (15 repetisi), beralih ke Kondisi B,
+> lalu menjalankan 15 repetisi. Total 30 repetisi per blok (15 A + 15 B).
+
+**Hari Kedua (Blok 2 — urutan B→A):**
+> ⚠️ **PENTING:** Anda BOLEH mematikan VM di sela-sela hari. Pastikan Anda
+> menjalankan Blok 2 di **hari yang berbeda** dari Blok 1 untuk menyebar
+> variabel perancu temporal. Skrip akan menolak dijalankan jika mendeteksi
+> tanggal yang sama dengan Blok 1.
+```bash
+bash scripts/run_full_experiment.sh block2
+```
+
+> Skrip akan otomatis menjalankan Kondisi B (15 repetisi), beralih ke Kondisi A,
+> lalu menjalankan 15 repetisi.
+
+**Ringkasan total eksperimen:**
+
+| Blok | Urutan    | Rep A | Rep B | Total |
+|------|-----------|-------|-------|-------|
+| 1    | A → B     | 15    | 15    | 30    |
+| 2    | B → A     | 15    | 15    | 30    |
+|      | **Total** | **30**| **30**| **60** |
+
+Total 60 repetisi gabungan yang memungkinkan analisis efek urutan (*order
+effect*) antar blok.
 
 ## Bagian 7 — Analisis
 
