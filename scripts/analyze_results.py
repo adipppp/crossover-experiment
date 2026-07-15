@@ -628,7 +628,7 @@ def run_mannwhitney_context_switches(df: pd.DataFrame):
     print("(Uji konfirmatori RM2 — H1a: perbandingan langsung none vs static)")
     print("=" * 70)
 
-    col = "involuntary_ctxt_switches_delta_whole_process"
+    col = "involuntary_ctxt_switches_delta_crossover_only"
     if col not in df.columns:
         print("  Kolom not found — skip.")
         print()
