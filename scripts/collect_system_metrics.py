@@ -328,6 +328,15 @@ def main():
     except (FileNotFoundError, ProcessLookupError):
         pass
 
+    # Snapshot cpu.stat "after" TIDAK dibaca pasca-exit (race condition — cgroup
+    # kerap sudah dihapus containerd saat itu, restartPolicy: Never mempercepat
+    # cleanup). Sebagai gantinya, snapshot terakhir yang berhasil dibaca SELAGI
+    # proses masih hidup disimpan di sini pada tiap iterasi loop polling, lalu
+    # dipakai sebagai pengganti "after" begitu loop berhenti. Trade-off: snapshot
+    # bisa seusia maksimal satu poll_interval dari waktu exit sebenarnya —
+    # ini disengaja dan lebih baik daripada gagal 100%.
+    last_known_cpu_stat = read_cgroup_cpu_stat(cgroup_path)
+
     t_start = time.time()
     while True:
         proc_path = Path(f"/proc/{pid}")
@@ -338,6 +347,19 @@ def main():
             samples.append((time.time(), snap["involuntary_ctxt_switches"]))
         except (FileNotFoundError, ProcessLookupError):
             break  # proses exit tepat di antara check exists() dan read
+
+        # Perbarui snapshot cpu.stat SELAGI proses (dan cgroup-nya) dijamin
+        # masih hidup. Dibungkus try/except terpisah dari sampling context
+        # switch di atas: kegagalan baca cgroup di satu iterasi tidak boleh
+        # menghentikan loop context-switch sampling, yang punya masalah
+        # ketepatan waktu berbeda dan lebih kritis untuk RQ2.
+        try:
+            fresh_cpu_stat = read_cgroup_cpu_stat(cgroup_path)
+            if fresh_cpu_stat:
+                last_known_cpu_stat = fresh_cpu_stat
+        except Exception:
+            pass  # pertahankan last_known_cpu_stat sebelumnya, jangan overwrite dengan {}
+
         time.sleep(args.poll_interval)
     t_end = time.time()
 
@@ -353,10 +375,12 @@ def main():
     if perf_log_file is not None:
         perf_log_file.close()
 
-    # cgroup biasanya masih tersedia sesaat setelah proses exit (sebelum container
-    # dihapus oleh kubelet), tapi ini RACE CONDITION — baca secepat mungkin.
-    cgroup_exists_after = cgroup_path.exists()
-    snapshot_after_cpu = read_cgroup_cpu_stat(cgroup_path) if cgroup_exists_after else {}
+    # FIX race condition: TIDAK membaca cpu.stat pasca-exit (lihat catatan di
+    # atas loop). snapshot_after_cpu memakai nilai terakhir yang berhasil
+    # dibaca SELAGI proses masih hidup, dari dalam loop polling.
+    snapshot_after_cpu = last_known_cpu_stat
+    cgroup_exists_after = cgroup_path.exists()  # tetap dicatat sbg metadata info,
+                                                 # TIDAK lagi menentukan validitas snapshot
 
     # Penyelarasan ke fase crossover: baca file hasil JSON utama dari run_solver.py
     # Karena sekarang hasil ditulis langsung ke hostPath (bukan kubectl cp),
@@ -419,7 +443,13 @@ def main():
             snapshot_after_cpu.get("throttled_usec", 0) - snapshot_before_cpu.get("throttled_usec", 0)
             if snapshot_after_cpu and snapshot_before_cpu else None
         ),
-        "missing_cgroup_snapshot": not cgroup_exists_after,
+        # Dengan fix race condition, snapshot_after_cpu diambil SELAGI proses
+        # masih hidup (dari loop polling), bukan pasca-exit. Field ini sekarang
+        # mencerminkan apakah snapshot valid berhasil didapat sama sekali
+        # (mis. proses exit sebelum loop sempat iterasi & sebelum seed awal
+        # berhasil membaca cgroup), bukan lagi soal cgroup exist pasca-exit.
+        "missing_cgroup_snapshot": not bool(snapshot_after_cpu),
+        "cgroup_existed_at_exit_check": cgroup_exists_after,
         # Hardware performance counters (triangulasi proksi RQ2)
         "perf_metrics": perf_metrics,
         "cache_miss_rate": cache_miss_rate,
