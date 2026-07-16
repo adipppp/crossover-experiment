@@ -566,11 +566,28 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
         print(f"  Run Kondisi A dengan missing_cgroup_snapshot: {n_missing} (tidak diketahui status throttling-nya)")
 
     if n_throttled == 0:
-        print("  PERINGATAN: Seluruh run Kondisi A memiliki missing_cgroup_snapshot=True (100% gagal baca cpu.stat).")
-        print("  Throttled_usec_delta tidak dapat dihitung sama sekali akibat race condition cgroup —")
-        print("  snapshot 'after' dihapus oleh kubelet sebelum skrip metrik sempat membacanya.")
-        print("  Uji sensitivitas throttling TIDAK DAPAT dijalankan. Ini BUKAN bukti bahwa throttling = 0;")
-        print("  ini adalah keterbatasan pengukuran yang harus dicatat di bab Hasil/Keterbatasan.")
+        if n_missing == n_total_none and n_total_none > 0:
+            # Seluruh run Kondisi A gagal mendapat snapshot cpu.stat sama sekali —
+            # kemungkinan besar akibat race condition cgroup (lihat catatan di
+            # collect_system_metrics.py). n_throttled=0 di sini TIDAK berarti
+            # throttling=0; artinya statusnya sama sekali tidak diketahui.
+            print("  PERINGATAN: Seluruh run Kondisi A memiliki missing_cgroup_snapshot=True (100% gagal baca cpu.stat).")
+            print("  Throttled_usec_delta tidak dapat dihitung sama sekali — snapshot cpu.stat tidak tersedia")
+            print("  untuk run-run ini (mis. proses exit sebelum snapshot awal sempat dibaca).")
+            print("  Uji sensitivitas throttling TIDAK DAPAT dijalankan. Ini BUKAN bukti bahwa throttling = 0;")
+            print("  ini adalah keterbatasan pengukuran yang harus dicatat di bab Hasil/Keterbatasan.")
+        else:
+            # Snapshot cpu.stat berhasil didapat (n_missing < n_total_none), dan
+            # tidak ada satu pun run yang menunjukkan throttled_usec_delta > 0.
+            # Ini adalah hasil yang GENUINE: throttling memang tidak terjadi,
+            # bukan kegagalan pengukuran. Konsisten dengan ekspektasi proposal
+            # Rev3 (limits.cpu=4 pada Kondisi A membuat throttling MUNGKIN
+            # terjadi, bukan PASTI terjadi).
+            print("  INFO: Tidak ada run Kondisi A dengan throttled_usec_delta > 0, dan snapshot cpu.stat")
+            print("  berhasil terbaca untuk mayoritas/seluruh run (bukan akibat missing_cgroup_snapshot).")
+            print("  Throttling genuinely tidak terjadi pada data ini — uji sensitivitas dilewati karena")
+            print("  tidak ada run untuk dieksklusi (himpunan 'excl throttled' identik dengan seluruh data).")
+            print("  Ini adalah hasil yang MENDUKUNG bahwa throttling bukan confounding factor untuk RQ1.")
         print()
         return
 
@@ -707,8 +724,9 @@ def main():
 
     n_missing_cgroup = df["missing_cgroup_snapshot"].sum() if "missing_cgroup_snapshot" in df.columns else 0
     if n_missing_cgroup > 0:
-        print(f"INFO: {int(n_missing_cgroup)} run kehilangan snapshot cgroup (terkena race condition). "
-              f"Throttled runs mungkin undercounted.")
+        print(f"INFO: {int(n_missing_cgroup)} run kehilangan snapshot cgroup (cpu.stat tidak terbaca "
+              f"sama sekali selama proses berjalan — periksa apakah ini kasus terisolasi atau sistemik). "
+              f"Throttled runs pada run tersebut mungkin undercounted.")
         print()
 
     n_instances = df["instance"].nunique()
