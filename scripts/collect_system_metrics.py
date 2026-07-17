@@ -134,11 +134,19 @@ def find_cgroup_path(pid: int) -> Path:
 
 def read_proc_status_ctxt_switches(pid: int) -> dict:
     """
-    Membaca dan menjumlahkan context switches dari seluruh thread proses (task)
-    di bawah /proc/<pid>/task/<tid>/status untuk mendukung workload multi-threaded.
+    Membaca context switches PER-TID (bukan cuma total) dari seluruh thread
+    proses (task) di bawah /proc/<pid>/task/<tid>/status.
+
+    Breakdown per-TID diperlukan karena Gurobi dapat membuat/menghancurkan
+    thread secara dinamis antar fase (mis. barrier vs crossover memakai pola
+    paralelisme berbeda). Menjumlahkan total across-TID pada dua titik waktu
+    yang berbeda TIDAK VALID jika populasi TID di kedua titik itu berbeda —
+    delta yang dihasilkan bisa negatif atau tidak bermakna secara matematis
+    (lihat compute_identity_aware_delta). Fungsi ini mengembalikan breakdown
+    agar identitas TID dapat dilacak antar sampling.
     """
-    total_voluntary = 0
-    total_involuntary = 0
+    per_tid_involuntary = {}
+    per_tid_voluntary = {}
     task_dir = Path(f"/proc/{pid}/task")
     if not task_dir.exists():
         raise FileNotFoundError(f"Direktori task untuk PID {pid} tidak ditemukan.")
@@ -150,16 +158,74 @@ def read_proc_status_ctxt_switches(pid: int) -> dict:
                 text = status_path.read_text()
                 voluntary = re.search(r"voluntary_ctxt_switches:\s+(\d+)", text)
                 nonvoluntary = re.search(r"nonvoluntary_ctxt_switches:\s+(\d+)", text)
+                tid = tid_dir.name
                 if voluntary:
-                    total_voluntary += int(voluntary.group(1))
+                    per_tid_voluntary[tid] = int(voluntary.group(1))
                 if nonvoluntary:
-                    total_involuntary += int(nonvoluntary.group(1))
+                    per_tid_involuntary[tid] = int(nonvoluntary.group(1))
             except (FileNotFoundError, ProcessLookupError):
                 pass  # thread mungkin sudah exited di antara iterasi
-                
+
     return {
-        "voluntary_ctxt_switches": total_voluntary,
-        "involuntary_ctxt_switches": total_involuntary,
+        "voluntary_ctxt_switches": sum(per_tid_voluntary.values()),
+        "involuntary_ctxt_switches": sum(per_tid_involuntary.values()),
+        # Breakdown per-TID — dipakai oleh compute_identity_aware_delta untuk
+        # menghitung delta yang identity-aware, bukan sekadar total-vs-total.
+        "per_tid_involuntary": per_tid_involuntary,
+    }
+
+
+def compute_identity_aware_delta(sample_start: dict, sample_end: dict) -> dict:
+    """
+    Menghitung delta involuntary context switches antara dua snapshot per-TID,
+    dengan penanganan eksplisit untuk TID yang muncul atau hilang di antara
+    kedua titik waktu tersebut — BUKAN menjumlahkan total across-TID pada tiap
+    titik lalu mengurangkannya (pendekatan lama yang salah jika populasi TID
+    berbeda; lihat catatan pada read_proc_status_ctxt_switches).
+
+    Aturan penanganan (skema kombinasi — lihat diskusi desain):
+    - TID yang ADA di kedua titik: delta = count_end[tid] - count_start[tid].
+      Jika hasilnya negatif (kernel counter tidak seharusnya turun untuk TID
+      yang sama), diklem ke 0 dan dicatat sebagai anomali — kemungkinan besar
+      TID di-reuse oleh kernel untuk thread yang berbeda di antara sampling.
+    - TID yang HANYA ADA di titik akhir (thread baru, spawn di tengah window):
+      seluruh count_end[tid] dihitung sebagai kontribusinya, karena kita tidak
+      punya baseline sebelum thread ini muncul — ini adalah lower-bound yang
+      valid untuk aktivitas thread tersebut sejak ia mulai teramati.
+    - TID yang HANYA ADA di titik awal (thread mati sebelum window berakhir):
+      TIDAK dihitung (kontribusi setelah titik awal tidak diketahui, dan static
+      count_start[tid] itu sendiri sudah bagian dari delta sebelumnya, bukan
+      delta window ini). Diikutkan di flag diagnostik agar terlihat di data,
+      bukan didiamkan.
+
+    Mengembalikan dict berisi delta serta metadata churn untuk pelaporan.
+    """
+    tids_start = set(sample_start.keys())
+    tids_end = set(sample_end.keys())
+
+    tids_common = tids_start & tids_end
+    tids_appeared = tids_end - tids_start
+    tids_disappeared = tids_start - tids_end
+
+    total_delta = 0
+    anomalous_negative_tids = []
+
+    for tid in tids_common:
+        d = sample_end[tid] - sample_start[tid]
+        if d < 0:
+            anomalous_negative_tids.append(tid)
+            d = 0  # klem ke 0, kemungkinan TID di-reuse kernel untuk thread lain
+        total_delta += d
+
+    for tid in tids_appeared:
+        total_delta += sample_end[tid]
+
+    return {
+        "delta": total_delta,
+        "thread_churn_detected": bool(tids_appeared or tids_disappeared),
+        "tids_appeared_mid_window": len(tids_appeared),
+        "tids_disappeared_mid_window": len(tids_disappeared),
+        "tids_anomalous_negative": len(anomalous_negative_tids),
     }
 
 
@@ -179,6 +245,13 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
     """
     Memotong time-series sample involuntary_ctxt_switches agar hanya mencakup
     rentang waktu fase crossover saja — BUKAN seluruh siklus hidup proses.
+
+    `samples` berisi (timestamp, per_tid_dict) — bukan lagi (timestamp, total)
+    — sehingga delta dihitung via compute_identity_aware_delta, yang menangani
+    TID yang muncul/hilang di dalam window secara eksplisit alih-alih
+    menjumlahkan total across-TID pada dua titik waktu berbeda (pendekatan
+    lama, tidak valid jika populasi TID berubah — lihat catatan pada
+    read_proc_status_ctxt_switches dan compute_identity_aware_delta).
     """
     if not solver_result_path.exists():
         print(
@@ -218,21 +291,17 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
 
     # Cari sample TERAKHIR dengan timestamp <= crossover_start_epoch
     idx_start = None
-    count_at_start = None
-    for i, (ts, count) in enumerate(samples):
+    for i, (ts, _) in enumerate(samples):
         if ts <= crossover_start_epoch:
             idx_start = i
-            count_at_start = count
         else:
             break
 
     # Cari sample TERAKHIR dengan timestamp <= crossover_end_epoch
     idx_end = None
-    count_at_end = None
-    for i, (ts, count) in enumerate(samples):
+    for i, (ts, _) in enumerate(samples):
         if ts <= crossover_end_epoch:
             idx_end = i
-            count_at_end = count
 
     if idx_start is None or idx_end is None:
         print(
@@ -242,13 +311,15 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
         return None
 
     # Jika idx_start == idx_end, crossover fase berjalan sangat cepat (< interval polling)
-    # sehingga count_at_start dan count_at_end diambil dari index sampel yang sama.
+    # sehingga snapshot_start dan snapshot_end diambil dari index sampel yang sama.
     crossover_too_short_warning = (idx_start == idx_end)
 
-    return {
-        "delta": count_at_end - count_at_start,
-        "crossover_too_short_warning": crossover_too_short_warning,
-    }
+    snapshot_start = samples[idx_start][1]
+    snapshot_end = samples[idx_end][1]
+
+    delta_info = compute_identity_aware_delta(snapshot_start, snapshot_end)
+    delta_info["crossover_too_short_warning"] = crossover_too_short_warning
+    return delta_info
 
 
 def parse_perf_stat(log_path: Path) -> dict:
@@ -318,13 +389,16 @@ def main():
 
     snapshot_before_cpu = read_cgroup_cpu_stat(cgroup_path)
 
-    # Sampling KONTINU (timestamp epoch, involuntary_ctxt_switches) sepanjang
-    # siklus hidup proses — bukan cuma before/after — supaya bisa dipotong
-    # belakangan agar pas dengan rentang fase crossover saja.
+    # Sampling KONTINU (timestamp epoch, snapshot per-TID) sepanjang siklus
+    # hidup proses — bukan cuma before/after — supaya bisa dipotong belakangan
+    # agar pas dengan rentang fase crossover saja. Menyimpan breakdown per-TID
+    # (bukan total across-TID) agar delta dapat dihitung secara identity-aware
+    # via compute_identity_aware_delta, yang menangani thread yang spawn/exit
+    # di tengah window secara eksplisit.
     samples = []
     try:
         snap = read_proc_status_ctxt_switches(pid)
-        samples.append((time.time(), snap["involuntary_ctxt_switches"]))
+        samples.append((time.time(), snap["per_tid_involuntary"]))
     except (FileNotFoundError, ProcessLookupError):
         pass
 
@@ -344,7 +418,7 @@ def main():
             break
         try:
             snap = read_proc_status_ctxt_switches(pid)
-            samples.append((time.time(), snap["involuntary_ctxt_switches"]))
+            samples.append((time.time(), snap["per_tid_involuntary"]))
         except (FileNotFoundError, ProcessLookupError):
             break  # proses exit tepat di antara check exists() dan read
 
@@ -395,11 +469,27 @@ def main():
     align_info = align_samples_to_crossover_phase(samples, solver_result_path)
     crossover_phase_delta = None
     crossover_too_short_warning = False
+    crossover_thread_churn_detected = None
+    crossover_tids_appeared_mid_window = None
+    crossover_tids_disappeared_mid_window = None
+    crossover_tids_anomalous_negative = None
     if align_info is not None:
         crossover_phase_delta = align_info["delta"]
         crossover_too_short_warning = align_info["crossover_too_short_warning"]
+        crossover_thread_churn_detected = align_info["thread_churn_detected"]
+        crossover_tids_appeared_mid_window = align_info["tids_appeared_mid_window"]
+        crossover_tids_disappeared_mid_window = align_info["tids_disappeared_mid_window"]
+        crossover_tids_anomalous_negative = align_info["tids_anomalous_negative"]
 
-    whole_process_delta = (samples[-1][1] - samples[0][1]) if len(samples) >= 2 else None
+    # whole_process_delta juga dihitung identity-aware (konsisten dengan fix
+    # pada crossover_phase_delta) — sebelumnya memakai total across-TID pada
+    # dua titik waktu, yang tidak valid jika populasi TID berubah sepanjang
+    # eksekusi (lihat catatan pada compute_identity_aware_delta).
+    whole_process_info = (
+        compute_identity_aware_delta(samples[0][1], samples[-1][1])
+        if len(samples) >= 2 else None
+    )
+    whole_process_delta = whole_process_info["delta"] if whole_process_info else None
 
     # Parse raw perf stats
     perf_metrics = parse_perf_stat(perf_log)
@@ -430,6 +520,17 @@ def main():
         # BUKAN involuntary_ctxt_switches_delta_whole_process.
         "involuntary_ctxt_switches_delta_crossover_phase_only": crossover_phase_delta,
         "crossover_too_short_warning": crossover_too_short_warning,
+        # Field diagnostik BARU — mendeteksi thread churn (spawn/exit) selama
+        # fase crossover, yang bisa memengaruhi keandalan delta di atas.
+        # Diberi nilai per run agar analisis dapat menjalankan sensitivity
+        # check (laporkan semua data + laporkan subset "bersih" tanpa churn
+        # secara terpisah) — pola yang sama seperti throttling sensitivity
+        # check untuk RQ1. Nilai None berarti alignment gagal total (mis.
+        # phase_timing tidak lengkap), bukan berarti tidak ada churn.
+        "crossover_thread_churn_detected": crossover_thread_churn_detected,
+        "crossover_tids_appeared_mid_window": crossover_tids_appeared_mid_window,
+        "crossover_tids_disappeared_mid_window": crossover_tids_disappeared_mid_window,
+        "crossover_tids_anomalous_negative_count": crossover_tids_anomalous_negative,
         # Disimpan sebagai pembanding/konteks saja — TIDAK dipakai untuk RQ2
         # karena mencampur aktivitas presolve+barrier+crossover sekaligus.
         "involuntary_ctxt_switches_delta_whole_process": whole_process_delta,
