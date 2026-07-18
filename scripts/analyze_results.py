@@ -784,13 +784,15 @@ def main():
         print()
     df = df[df["status_code"] == 2]
 
-    # Identifikasi run Kondisi A yang mengalami CFS throttling (tidak dikeluarkan dari utama)
+    # Identifikasi run Kondisi A yang mengalami CFS throttling secara bermakna
+    # (proporsional terhadap crossover_seconds, default ambang 5% — lihat
+    # identify_throttled_runs). Tidak dikeluarkan dari analisis utama.
     flagged_df = identify_throttled_runs(df)
     if not flagged_df.empty:
-        print(f"INFO: {len(flagged_df)} run Kondisi A mengalami CFS throttling "
-              f"(throttled_usec_delta > 0) — TETAP masuk analisis utama, "
+        print(f"INFO: {len(flagged_df)} run Kondisi A mengalami CFS throttling bermakna "
+              f"(> 5% dari crossover_seconds) — TETAP masuk analisis utama, "
               f"namun diuji ulang secara terpisah di throttling sensitivity check.")
-        print(flagged_df[["run_id", "throttled_usec_delta"]].to_string(index=False))
+        print(flagged_df[["run_id", "throttled_usec_delta", "throttle_proportion_of_crossover"]].to_string(index=False))
         print()
 
     n_missing_cgroup = df["missing_cgroup_snapshot"].sum() if "missing_cgroup_snapshot" in df.columns else 0
