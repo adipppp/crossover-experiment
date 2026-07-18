@@ -102,24 +102,60 @@ def load_results(results_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def identify_throttled_runs(df: pd.DataFrame):
+def identify_throttled_runs(df: pd.DataFrame, proportional_threshold: float = 0.05):
     """
-    Identifikasi run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
-    Run ini di-flag untuk analisis SENSITIVITY saja (lihat
-    run_throttling_sensitivity_check di bawah), BUKAN untuk dikeluarkan dari
-    analisis utama RM1. Analisis utama tetap memakai seluruh data.
+    Identifikasi run Kondisi A yang mengalami CFS throttling SECARA BERMAKNA
+    (bukan sekadar throttled_usec_delta > 0). Run ini di-flag untuk analisis
+    SENSITIVITY saja (lihat run_throttling_sensitivity_check di bawah), BUKAN
+    untuk dikeluarkan dari analisis utama RM1. Analisis utama tetap memakai
+    seluruh data.
 
-    Sesuai proposal Subbab "Analisis Data" RM1:
-    "Apabila kedua hasil konsisten, throttling dapat disingkirkan sebagai
-    confounding factor utama bagi RM1."
+    PENTING — ambang PROPORSIONAL, bukan biner:
+    Versi sebelumnya mengeklusi run berdasarkan throttled_usec_delta > 0 saja
+    (biner: ada/tidak ada throttling sama sekali). Ini bermasalah untuk
+    instance dengan crossover time panjang (mis. L1_sixm1000obs, ~2.5s):
+    throttling ratusan ribu mikrodetik terlihat besar dalam angka absolut,
+    tapi proporsinya terhadap durasi crossover itulah yang relevan terhadap
+    ambang 5% yang ditetapkan Rev3 — bukan sekadar non-zero. Ambang biner
+    membuang HAMPIR SEMUA run pada instance dengan throttling tersebar
+    (kebanyakan run sedikit throttle, jarang yang benar-benar bersih),
+    menyisakan sampel yang terlalu kecil untuk diuji ("data terlalu sedikit
+    setelah eksklusi") — bukan karena datanya memang tidak cukup, tapi karena
+    ambangnya terlalu ketat untuk pertanyaan yang sebenarnya ingin dijawab:
+    "apakah throttling YANG BERMAKNA memengaruhi kesimpulan RQ1?"
+
+    proportional_threshold: proporsi throttled_usec_delta terhadap
+    crossover_seconds (dikonversi ke skala yang sama, detik) di ATAS mana
+    sebuah run dianggap "throttled secara bermakna". Default 0.05 (5%),
+    sesuai ambang yang ditetapkan proposal Rev3 untuk indikator throttling
+    overhead. Run dengan crossover_seconds tidak tersedia (None/NaN) tidak
+    bisa dihitung proporsinya — diperlakukan sebagai throttled (konservatif)
+    agar tidak keliru dimasukkan ke sampel "bersih" tanpa dasar.
     """
-    # Run yang di-flag: Kondisi A dengan throttled_usec_delta > 0
-    throttled_mask = (
-        (df["condition"] == "none") &
-        (df["throttled_usec_delta"].notna()) &
-        (df["throttled_usec_delta"] > 0)
+    is_none = df["condition"] == "none"
+    has_throttle_data = df["throttled_usec_delta"].notna()
+    has_crossover_time = df["crossover_seconds"].notna() & (df["crossover_seconds"] > 0)
+
+    # Proporsi throttling terhadap durasi crossover (throttled_usec_delta
+    # dalam mikrodetik -> detik, dibagi crossover_seconds dalam detik).
+    throttle_proportion = pd.Series(index=df.index, dtype=float)
+    valid_for_ratio = has_throttle_data & has_crossover_time
+    throttle_proportion[valid_for_ratio] = (
+        (df.loc[valid_for_ratio, "throttled_usec_delta"] / 1_000_000)
+        / df.loc[valid_for_ratio, "crossover_seconds"]
     )
-    flagged = df[throttled_mask].copy()
+
+    # Run dianggap "throttled secara bermakna" jika:
+    # (a) proporsinya di atas ambang, ATAU
+    # (b) datanya tidak cukup untuk dihitung (konservatif — tidak dimasukkan
+    #     ke sampel bersih tanpa bukti bahwa throttling-nya memang rendah)
+    meaningfully_throttled = is_none & (
+        (valid_for_ratio & (throttle_proportion > proportional_threshold)) |
+        (~valid_for_ratio & has_throttle_data)  # ada data tapi crossover_seconds hilang
+    )
+
+    flagged = df[meaningfully_throttled].copy()
+    flagged["throttle_proportion_of_crossover"] = throttle_proportion[meaningfully_throttled]
     return flagged
 
 
@@ -532,10 +568,14 @@ def check_order_effect(df: pd.DataFrame) -> bool:
 
 
 def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
-                                     alpha_corrected: float):
+                                     alpha_corrected: float, proportional_threshold: float = 0.05):
     """
     Uji sensitivitas RM1: jalankan ulang Mann-Whitney U dengan mengekslusi
-    run Kondisi A yang mengalami CFS throttling (throttled_usec_delta > 0).
+    run Kondisi A yang mengalami CFS throttling SECARA BERMAKNA — proporsi
+    throttled_usec_delta terhadap crossover_seconds di atas
+    proportional_threshold (default 5%, ambang Rev3), BUKAN throttled_usec_delta
+    > 0 semata. Lihat catatan lengkap di identify_throttled_runs mengapa ambang
+    proporsional dipakai alih-alih biner.
 
     Sesuai proposal Subbab "Analisis Data" RM1:
     "Apabila kedua hasil konsisten, throttling dapat disingkirkan sebagai
@@ -544,24 +584,42 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
     """
     print("=" * 70)
     print("UJI SENSITIVITAS THROTTLING (RQ1)")
-    print("(Memverifikasi throttling bukan confounding factor dominan)")
+    print(f"(Ambang eksklusi: throttling > {proportional_threshold:.0%} dari crossover_seconds per run)")
     print("=" * 70)
 
-    # Identifikasi run ter-throttle
-    throttled_mask = (
-        (df_all["condition"] == "none") &
-        (df_all["throttled_usec_delta"].notna()) &
-        (df_all["throttled_usec_delta"] > 0)
+    is_none = df_all["condition"] == "none"
+    has_throttle_data = df_all["throttled_usec_delta"].notna()
+    has_crossover_time = df_all["crossover_seconds"].notna() & (df_all["crossover_seconds"] > 0)
+    valid_for_ratio = has_throttle_data & has_crossover_time
+
+    throttle_proportion = pd.Series(index=df_all.index, dtype=float)
+    throttle_proportion[valid_for_ratio] = (
+        (df_all.loc[valid_for_ratio, "throttled_usec_delta"] / 1_000_000)
+        / df_all.loc[valid_for_ratio, "crossover_seconds"]
+    )
+
+    throttled_mask = is_none & (
+        (valid_for_ratio & (throttle_proportion > proportional_threshold)) |
+        (~valid_for_ratio & has_throttle_data)
     )
     n_throttled = throttled_mask.sum()
-    n_total_none = (df_all["condition"] == "none").sum()
+    n_total_none = is_none.sum()
     if "missing_cgroup_snapshot" in df_all.columns:
-        missing_mask = (df_all["condition"] == "none") & (df_all["missing_cgroup_snapshot"] == True)
+        missing_mask = is_none & (df_all["missing_cgroup_snapshot"] == True)
     else:
         missing_mask = pd.Series(False, index=df_all.index)
     n_missing = missing_mask.sum()
 
-    print(f"  Run Kondisi A dengan throttled_usec_delta > 0: {n_throttled} / {n_total_none}")
+    print(f"  Run Kondisi A dengan throttling > {proportional_threshold:.0%} dari crossover_seconds: {n_throttled} / {n_total_none}")
+    # Info tambahan: berapa run yang punya throttling non-zero TAPI di bawah
+    # ambang (dulu dieksklusi oleh ambang biner, sekarang tetap masuk sampel
+    # "bersih" karena proporsinya kecil) — membantu menjelaskan mengapa n
+    # berbeda dari versi sebelumnya jika dibandingkan.
+    n_nonzero_but_below_threshold = (
+        is_none & valid_for_ratio & (throttle_proportion > 0) & (throttle_proportion <= proportional_threshold)
+    ).sum()
+    if n_nonzero_but_below_threshold > 0:
+        print(f"  (Tambahan: {n_nonzero_but_below_threshold} run none punya throttling non-zero namun di bawah ambang — tetap masuk sampel 'bersih'.)")
     if n_missing > 0:
         print(f"  Run Kondisi A dengan missing_cgroup_snapshot: {n_missing} (tidak diketahui status throttling-nya)")
 
@@ -578,16 +636,29 @@ def run_throttling_sensitivity_check(df_all: pd.DataFrame, mw_results_all: dict,
             print("  ini adalah keterbatasan pengukuran yang harus dicatat di bab Hasil/Keterbatasan.")
         else:
             # Snapshot cpu.stat berhasil didapat (n_missing < n_total_none), dan
-            # tidak ada satu pun run yang menunjukkan throttled_usec_delta > 0.
-            # Ini adalah hasil yang GENUINE: throttling memang tidak terjadi,
-            # bukan kegagalan pengukuran. Konsisten dengan ekspektasi proposal
-            # Rev3 (limits.cpu=4 pada Kondisi A membuat throttling MUNGKIN
-            # terjadi, bukan PASTI terjadi).
-            print("  INFO: Tidak ada run Kondisi A dengan throttled_usec_delta > 0, dan snapshot cpu.stat")
-            print("  berhasil terbaca untuk mayoritas/seluruh run (bukan akibat missing_cgroup_snapshot).")
-            print("  Throttling genuinely tidak terjadi pada data ini — uji sensitivitas dilewati karena")
-            print("  tidak ada run untuk dieksklusi (himpunan 'excl throttled' identik dengan seluruh data).")
-            print("  Ini adalah hasil yang MENDUKUNG bahwa throttling bukan confounding factor untuk RQ1.")
+            # tidak ada satu pun run yang throttling-nya MELEBIHI ambang
+            # proporsional. Dua sub-kasus dibedakan secara eksplisit karena
+            # bermakna berbeda: (a) throttled_usec_delta memang 0 di semua run
+            # (throttling genuinely tidak terjadi), vs (b) ada throttling
+            # non-zero di banyak run tapi proporsinya selalu di bawah ambang
+            # (throttling terjadi tapi tidak bermakna secara praktis). Kasus
+            # (b) TIDAK bisa disebut "tidak ada throttled_usec_delta > 0" —
+            # itu keliru dan pernah jadi pesan versi sebelumnya.
+            n_all_zero = (
+                is_none & valid_for_ratio & (throttle_proportion == 0)
+            ).sum()
+            if n_all_zero == n_total_none:
+                print("  INFO: throttled_usec_delta = 0 di SELURUH run Kondisi A — throttling genuinely")
+                print("  tidak terjadi pada data ini, bukan sekadar di bawah ambang. Konsisten dengan")
+                print("  ekspektasi proposal Rev3 (limits.cpu=4 pada Kondisi A membuat throttling MUNGKIN")
+                print("  terjadi, bukan PASTI terjadi).")
+            else:
+                print(f"  INFO: Sejumlah run Kondisi A mengalami throttling non-zero (lihat baris 'Tambahan' di atas),")
+                print(f"  namun SELURUHNYA berada di bawah ambang {proportional_threshold:.0%} dari crossover_seconds")
+                print("  masing-masing run — sehingga tidak ada run yang dieksklusi dari sampel 'bersih'.")
+            print("  Uji sensitivitas dilewati karena tidak ada run untuk dieksklusi (himpunan 'excl")
+            print("  throttled' identik dengan seluruh data). Ini adalah hasil yang MENDUKUNG bahwa")
+            print("  throttling bukan confounding factor bermakna untuk RQ1 pada instance ini.")
         print()
         return
 
