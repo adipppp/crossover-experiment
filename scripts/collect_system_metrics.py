@@ -29,6 +29,7 @@ cgroup v1, sesuaikan find_cgroup_path() di bawah.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -241,22 +242,18 @@ def read_cgroup_cpu_stat(cgroup_path: Path) -> dict:
     return stats
 
 
-def align_samples_to_crossover_phase(samples, solver_result_path: Path):
+def get_crossover_epoch_bounds(solver_result_path: Path):
     """
-    Memotong time-series sample involuntary_ctxt_switches agar hanya mencakup
-    rentang waktu fase crossover saja — BUKAN seluruh siklus hidup proses.
-
-    `samples` berisi (timestamp, per_tid_dict) — bukan lagi (timestamp, total)
-    — sehingga delta dihitung via compute_identity_aware_delta, yang menangani
-    TID yang muncul/hilang di dalam window secara eksplisit alih-alih
-    menjumlahkan total across-TID pada dua titik waktu berbeda (pendekatan
-    lama, tidak valid jika populasi TID berubah — lihat catatan pada
-    read_proc_status_ctxt_switches dan compute_identity_aware_delta).
+    Membaca hasil run_solver.py dan menghitung batas epoch absolut awal/akhir
+    fase crossover (optimize_start_epoch_unix + crossover_start/end_runtime).
+    Dipisah dari pencarian index boundary supaya bisa dipakai bersama oleh
+    context-switch DAN steal-time (keduanya di-sample pada timestamp yang
+    identik dalam loop polling yang sama, lihat main()).
     """
     if not solver_result_path.exists():
         print(
             f"PERINGATAN: file hasil solver {solver_result_path} tidak ditemukan — "
-            f"tidak bisa menghitung delta context-switch khusus fase crossover.",
+            f"tidak bisa menghitung delta metrik khusus fase crossover.",
             file=sys.stderr,
         )
         return None
@@ -280,26 +277,32 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
         )
         return None
 
-    crossover_start_epoch = optimize_start_epoch + crossover_start_runtime
-    crossover_end_epoch = optimize_start_epoch + crossover_end_runtime
+    return {
+        "crossover_start_epoch": optimize_start_epoch + crossover_start_runtime,
+        "crossover_end_epoch": optimize_start_epoch + crossover_end_runtime,
+    }
 
-    if not samples:
+
+def find_boundary_indices(timestamps, crossover_start_epoch, crossover_end_epoch):
+    """
+    Mencari index sample TERAKHIR dengan timestamp <= batas awal/akhir crossover.
+    `timestamps` adalah daftar epoch time sample, terurut menaik. Dipisah dari
+    perhitungan delta agar index yang sama bisa dipakai ulang untuk beberapa
+    time-series berbeda (context-switch per-TID, steal-time per-cpu) yang
+    disampling pada timestamp identik dalam satu iterasi loop.
+    """
+    if not timestamps:
         return None
 
-    # Urutkan secara eksplisit agar aman dari segala bug log sampling
-    samples.sort(key=lambda x: x[0])
-
-    # Cari sample TERAKHIR dengan timestamp <= crossover_start_epoch
     idx_start = None
-    for i, (ts, _) in enumerate(samples):
+    for i, ts in enumerate(timestamps):
         if ts <= crossover_start_epoch:
             idx_start = i
         else:
             break
 
-    # Cari sample TERAKHIR dengan timestamp <= crossover_end_epoch
     idx_end = None
-    for i, (ts, _) in enumerate(samples):
+    for i, ts in enumerate(timestamps):
         if ts <= crossover_end_epoch:
             idx_end = i
 
@@ -310,16 +313,106 @@ def align_samples_to_crossover_phase(samples, solver_result_path: Path):
         )
         return None
 
-    # Jika idx_start == idx_end, crossover fase berjalan sangat cepat (< interval polling)
-    # sehingga snapshot_start dan snapshot_end diambil dari index sampel yang sama.
-    crossover_too_short_warning = (idx_start == idx_end)
+    return {
+        "idx_start": idx_start,
+        "idx_end": idx_end,
+        # Jika idx_start == idx_end, fase crossover berjalan lebih cepat dari
+        # satu interval polling, sehingga snapshot start/end sama.
+        "crossover_too_short_warning": (idx_start == idx_end),
+    }
 
-    snapshot_start = samples[idx_start][1]
-    snapshot_end = samples[idx_end][1]
+
+def align_samples_to_crossover_phase(samples, solver_result_path: Path):
+    """
+    Memotong time-series sample involuntary_ctxt_switches agar hanya mencakup
+    rentang waktu fase crossover saja — BUKAN seluruh siklus hidup proses.
+
+    `samples` berisi (timestamp, per_tid_dict) — bukan lagi (timestamp, total)
+    — sehingga delta dihitung via compute_identity_aware_delta, yang menangani
+    TID yang muncul/hilang di dalam window secara eksplisit alih-alih
+    menjumlahkan total across-TID pada dua titik waktu berbeda (pendekatan
+    lama, tidak valid jika populasi TID berubah — lihat catatan pada
+    read_proc_status_ctxt_switches dan compute_identity_aware_delta).
+    """
+    bounds = get_crossover_epoch_bounds(solver_result_path)
+    if bounds is None or not samples:
+        return None
+
+    samples.sort(key=lambda x: x[0])  # urutkan eksplisit, aman dari bug log sampling
+    idx_info = find_boundary_indices(
+        [ts for ts, _ in samples],
+        bounds["crossover_start_epoch"],
+        bounds["crossover_end_epoch"],
+    )
+    if idx_info is None:
+        return None
+
+    snapshot_start = samples[idx_info["idx_start"]][1]
+    snapshot_end = samples[idx_info["idx_end"]][1]
 
     delta_info = compute_identity_aware_delta(snapshot_start, snapshot_end)
-    delta_info["crossover_too_short_warning"] = crossover_too_short_warning
+    delta_info["crossover_too_short_warning"] = idx_info["crossover_too_short_warning"]
     return delta_info
+
+
+def read_proc_stat_jiffies() -> dict:
+    """
+    Membaca /proc/stat host dan mengembalikan jiffies mentah per baris cpu
+    ('cpu' agregat dan tiap 'cpuN' individual), termasuk field ke-8 (steal)
+    -- waktu yang hypervisor "curi" dari vCPU ini untuk melayani tenant lain.
+
+    TAMBAHAN pasca-audit: metrik ini sebelumnya TIDAK dikumpulkan sama sekali,
+    sehingga hipotesis noisy-neighbor (dipakai untuk menjelaskan anomali
+    temporal cont11, lihat Bab Hasil Subbab 4.3.5) tidak bisa diuji langsung
+    dari data yang terkumpul -- hanya disingkirkan secara tidak langsung.
+    steal time adalah sinyal PALING LANGSUNG untuk kontensi level-hypervisor
+    yang tersedia dari guest, dan murah untuk disampling di setiap iterasi
+    polling yang sudah berjalan untuk context-switch.
+
+    Format /proc/stat per baris cpu: user nice system idle iowait irq softirq
+    steal guest guest_nice (field ke-8, index 7, adalah steal; beberapa kernel
+    lama tidak melaporkan field setelah idle -- ditangani dengan default 0).
+    """
+    result = {}
+    try:
+        with open("/proc/stat", "r") as f:
+            for line in f:
+                if not line.startswith("cpu"):
+                    break  # baris cpu selalu di awal /proc/stat; setelah itu berhenti
+                parts = line.split()
+                label = parts[0]  # "cpu" (agregat) atau "cpu0", "cpu1", ...
+                fields = [int(x) for x in parts[1:]]
+                fields += [0] * (10 - len(fields))  # pad jika field steal/guest tidak ada
+                result[label] = {
+                    "user": fields[0], "nice": fields[1], "system": fields[2],
+                    "idle": fields[3], "iowait": fields[4], "irq": fields[5],
+                    "softirq": fields[6], "steal": fields[7],
+                    "guest": fields[8], "guest_nice": fields[9],
+                }
+    except Exception as e:
+        print(f"PERINGATAN: gagal membaca /proc/stat untuk steal time: {e}", file=sys.stderr)
+    return result
+
+
+def compute_steal_delta(snapshot_start: dict, snapshot_end: dict, clk_tck: float) -> dict:
+    """
+    Menghitung delta steal time (dalam detik, dikonversi dari jiffies via
+    CLK_TCK host) antara dua snapshot /proc/stat, untuk 'cpu' agregat dan
+    tiap cpu individual yang ada di kedua snapshot.
+    """
+    if not snapshot_start or not snapshot_end:
+        return {"aggregate_steal_seconds": None, "per_cpu_steal_seconds": {}}
+
+    per_cpu = {}
+    for label in snapshot_end:
+        if label in snapshot_start:
+            d = snapshot_end[label]["steal"] - snapshot_start[label]["steal"]
+            per_cpu[label] = round(max(d, 0) / clk_tck, 6)
+
+    return {
+        "aggregate_steal_seconds": per_cpu.get("cpu"),
+        "per_cpu_steal_seconds": per_cpu,
+    }
 
 
 def parse_perf_stat(log_path: Path) -> dict:
@@ -395,10 +488,19 @@ def main():
     # (bukan total across-TID) agar delta dapat dihitung secara identity-aware
     # via compute_identity_aware_delta, yang menangani thread yang spawn/exit
     # di tengah window secara eksplisit.
+    clk_tck = os.sysconf("SC_CLK_TCK")  # biasanya 100 di Linux; dipakai konversi jiffies->detik steal time
+
+    # samples (context-switch) dan steal_samples (host-wide /proc/stat) di-sample
+    # PADA TIMESTAMP YANG SAMA tiap iterasi (lihat loop di bawah), sehingga index
+    # boundary hasil find_boundary_indices() bisa dipakai ulang untuk keduanya
+    # tanpa perlu mencari batas waktu dua kali secara terpisah.
     samples = []
+    steal_samples = []
     try:
         snap = read_proc_status_ctxt_switches(pid)
-        samples.append((time.time(), snap["per_tid_involuntary"]))
+        t0 = time.time()
+        samples.append((t0, snap["per_tid_involuntary"]))
+        steal_samples.append((t0, read_proc_stat_jiffies()))
     except (FileNotFoundError, ProcessLookupError):
         pass
 
@@ -418,7 +520,12 @@ def main():
             break
         try:
             snap = read_proc_status_ctxt_switches(pid)
-            samples.append((time.time(), snap["per_tid_involuntary"]))
+            ts_now = time.time()
+            samples.append((ts_now, snap["per_tid_involuntary"]))
+            # TAMBAHAN pasca-audit: steal time disample di timestamp yang SAMA
+            # persis dengan context-switch (bukan time.time() terpisah), supaya
+            # index boundary fase-crossover identik untuk keduanya.
+            steal_samples.append((ts_now, read_proc_stat_jiffies()))
         except (FileNotFoundError, ProcessLookupError):
             break  # proses exit tepat di antara check exists() dan read
 
@@ -491,6 +598,30 @@ def main():
     )
     whole_process_delta = whole_process_info["delta"] if whole_process_info else None
 
+    # TAMBAHAN pasca-audit: steal time whole-process dan fase-crossover.
+    # steal_samples memakai timestamp yang identik dengan samples (context
+    # switch) pada tiap iterasi, sehingga boundary index dari
+    # find_boundary_indices() bisa dipakai ulang langsung tanpa mencari lagi.
+    steal_whole_process = (
+        compute_steal_delta(steal_samples[0][1], steal_samples[-1][1], clk_tck)
+        if len(steal_samples) >= 2 else {"aggregate_steal_seconds": None, "per_cpu_steal_seconds": {}}
+    )
+
+    steal_crossover_phase = {"aggregate_steal_seconds": None, "per_cpu_steal_seconds": {}}
+    bounds = get_crossover_epoch_bounds(solver_result_path)
+    if bounds is not None and steal_samples:
+        idx_info = find_boundary_indices(
+            [ts for ts, _ in steal_samples],
+            bounds["crossover_start_epoch"],
+            bounds["crossover_end_epoch"],
+        )
+        if idx_info is not None:
+            steal_crossover_phase = compute_steal_delta(
+                steal_samples[idx_info["idx_start"]][1],
+                steal_samples[idx_info["idx_end"]][1],
+                clk_tck,
+            )
+
     # Parse raw perf stats
     perf_metrics = parse_perf_stat(perf_log)
 
@@ -534,6 +665,17 @@ def main():
         # Disimpan sebagai pembanding/konteks saja — TIDAK dipakai untuk RQ2
         # karena mencampur aktivitas presolve+barrier+crossover sekaligus.
         "involuntary_ctxt_switches_delta_whole_process": whole_process_delta,
+        # TAMBAHAN pasca-audit: CPU steal time (host-wide, dari /proc/stat),
+        # sinyal LANGSUNG kontensi level-hypervisor (noisy-neighbor). Diambil
+        # per-cpu agar core reserved/solver bisa dibedakan; "aggregate_steal_seconds"
+        # adalah baris "cpu" gabungan seluruh core. Dipakai sebagai kovariat/
+        # pemeriksa tambahan untuk RQ1 dan investigasi anomali temporal
+        # semacam Subbab 4.3.5, TIDAK menggantikan involuntary context switches
+        # sebagai proksi utama RQ2.
+        "steal_seconds_delta_crossover_phase": steal_crossover_phase["aggregate_steal_seconds"],
+        "steal_seconds_delta_crossover_phase_per_cpu": steal_crossover_phase["per_cpu_steal_seconds"],
+        "steal_seconds_delta_whole_process": steal_whole_process["aggregate_steal_seconds"],
+        "steal_seconds_delta_whole_process_per_cpu": steal_whole_process["per_cpu_steal_seconds"],
         "cpu_stat_before": snapshot_before_cpu,
         "cpu_stat_after": snapshot_after_cpu,
         "throttled_periods_delta": (
