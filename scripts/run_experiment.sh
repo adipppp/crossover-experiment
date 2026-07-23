@@ -71,6 +71,12 @@ if [[ "${_AUTO_RESUME:-0}" != "1" ]]; then
                 exit 1
             fi
             echo ">>> [AUTO-RESUME] Ditemukan kegagalan (Exit: $EXIT_CODE). Menunggu 30s sebelum retry..."
+            # FIX pasca-audit: catat setiap re-eksekusi skrip penuh ke jejak persisten.
+            # jq dijamin tersedia di titik ini -- skrip sudah hard-fail di awal
+            # (blok _AUTO_RESUME di atas) kalau jq tidak terinstal.
+            RESULTS_DIR_FOR_LOG="/mnt/experiment-data/results"
+            mkdir -p "$RESULTS_DIR_FOR_LOG" 2>/dev/null || true
+            printf '%s\n' "$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg cond "${1:-}" --arg blok "${4:-1}" --argjson attempt "$ATTEMPT" --argjson exit_code "$EXIT_CODE" '{timestamp_utc:$ts, condition:$cond, block:$blok, attempt_that_failed:$attempt, exit_code:$exit_code, reason:"whole_script_auto_resume"}')" >> "$RESULTS_DIR_FOR_LOG/retry_log.jsonl" 2>/dev/null || true
             sleep 30
             ATTEMPT=$((ATTEMPT + 1))
         fi
@@ -175,6 +181,11 @@ for instance in "${INSTANCES[@]}"; do
         continue
       else
         echo "PERINGATAN: Artefak corrupt untuk $run_id. Menghapus untuk retry..."
+        # FIX pasca-audit: catat retry ke jejak persisten SEBELUM menghapus,
+        # supaya jumlah retry per run_id dapat direkonstruksi dari hasil akhir
+        # (sebelumnya hilang total begitu artefak dihapus -- lihat keterbatasan
+        # yang didokumentasikan di Bab Metode Subbab 3.5).
+        printf '%s\n' "$(jq -nc --arg run_id "$run_id" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg reason "corrupt_artifact_on_skip_check" --arg cond "$CONDITION" --arg blok "$BLOCK" '{run_id:$run_id, timestamp_utc:$ts, reason:$reason, condition:$cond, block:$blok}')" >> "$RESULTS_DIR/retry_log.jsonl"
         rm -f "$RESULTS_DIR/${run_id}".*
       fi
     fi
@@ -217,14 +228,60 @@ for instance in "${INSTANCES[@]}"; do
       fi
     done
 
-    # Pin metrics collector to reserved core to prevent interference with solver
+    # Pin metrics collector to reserved core to prevent interference with solver.
+    #
+    # FIX KRITIS (audit pasca-eksperimen): versi sebelumnya diam-diam fallback ke
+    # CPU 0 jika topology-report.json tidak terbaca. Untuk topologi final (8
+    # physical core, SMT off), reserved_cpu adalah core DI LUAR core_selection.solver_cpus
+    # (lihat characterize_topology.py), sedangkan CPU 0 adalah salah satu dari 4
+    # core yang justru dialokasikan EKSKLUSIF ke solver pada Kondisi B. Silent
+    # fallback ke CPU 0 berarti metrics collector bisa taskset ke core solver itu
+    # sendiri -- karena isolasi cpuset K8s CPU Manager `static` HANYA mencegah Pod
+    # lain masuk, BUKAN proses host biasa di luar kubepods.slice seperti skrip ini.
+    # Kalau ini terjadi, setiap siklus polling (tiap poll-interval) memaksa
+    # preemption thread solver di core itu -- involuntary context switch BUATAN,
+    # bukan efek CPU pinning yang sesungguhnya diukur (persis metrik utama RQ2).
+    #
+    # Karena itu, sekarang HARD-FAIL kalau reserved_cpu tidak terbaca, alih-alih
+    # melanjutkan dengan asumsi yang berisiko salah secara diam-diam.
     RESERVED_CPU=""
-    if [ -f "$SCRIPT_DIR/../infra/topology-report.json" ]; then
-      RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/../infra/topology-report.json'))['core_selection']['reserved_cpu'])" 2>/dev/null)
+    TOPOLOGY_REPORT="$SCRIPT_DIR/../infra/topology-report.json"
+    SOLVER_CPUS_JSON=""
+    if [ -f "$TOPOLOGY_REPORT" ]; then
+      RESERVED_CPU=$(python3 -c "import json; print(json.load(open('$TOPOLOGY_REPORT'))['core_selection']['reserved_cpu'])" 2>/dev/null)
+      SOLVER_CPUS_JSON=$(python3 -c "import json; print(json.dumps(json.load(open('$TOPOLOGY_REPORT'))['core_selection']['solver_cpus']))" 2>/dev/null)
     fi
     if [ -z "$RESERVED_CPU" ]; then
-      echo "WARNING: Gagal membaca reserved_cpu dari topology-report.json. Menggunakan fallback CPU 0 untuk metrics collector!" >&2
-      RESERVED_CPU="0"
+      echo "FATAL: Gagal membaca reserved_cpu dari $TOPOLOGY_REPORT." >&2
+      echo "       TIDAK melanjutkan dengan fallback CPU 0 -- itu berisiko sama dengan" >&2
+      echo "       core yang dialokasikan eksklusif ke solver pada Kondisi B, yang akan" >&2
+      echo "       mencemari pengukuran involuntary context switches (RQ2) secara diam-diam." >&2
+      echo "       Jalankan scripts/characterize_topology.py terlebih dahulu untuk" >&2
+      echo "       menghasilkan $TOPOLOGY_REPORT, lalu ulangi." >&2
+      # Pod sudah terlanjur dijalankan (kubectl apply di atas) sebelum titik ini;
+      # bersihkan sebelum keluar supaya tidak menyisakan Pod menganggur.
+      kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=false --ignore-not-found=true
+      rm -f "$rendered_manifest"
+      exit 1
+    fi
+    # Sanity check tambahan: reserved_cpu tidak boleh tumpang tindih dengan
+    # solver_cpus yang SESUNGGUHNYA (dibaca langsung dari topology-report.json,
+    # BUKAN dari CPU_COUNT -- CPU_COUNT adalah argumen jumlah core solver yang
+    # diminta di kubelet/manifest, bukan daftar CPU ID solver_cpus itu sendiri,
+    # sehingga membandingkan reserved_cpu terhadap rentang 0..CPU_COUNT-1 bisa
+    # keliru kalau skema penomoran core_selection tidak dimulai dari 0 secara
+    # berurutan seperti pada topologi saat ini).
+    if [ -n "$SOLVER_CPUS_JSON" ]; then
+      OVERLAP=$(python3 -c "import json,sys; print('1' if $RESERVED_CPU in json.loads('$SOLVER_CPUS_JSON') else '0')" 2>/dev/null)
+      if [ "$OVERLAP" = "1" ]; then
+        echo "FATAL: reserved_cpu ($RESERVED_CPU) tumpang tindih dengan solver_cpus ($SOLVER_CPUS_JSON)." >&2
+        echo "       Periksa kembali $TOPOLOGY_REPORT dan render_kubelet_configs.py." >&2
+        kubectl delete pod "$pod_name" -n "$NAMESPACE" --wait=false --ignore-not-found=true
+        rm -f "$rendered_manifest"
+        exit 1
+      fi
+    else
+      echo "PERINGATAN: solver_cpus tidak terbaca dari $TOPOLOGY_REPORT -- sanity-check overlap dilewati (reserved_cpu=$RESERVED_CPU tetap dipakai)." >&2
     fi
 
     metrics_output="$RESULTS_DIR/${run_id}.sysmetrics.json"
@@ -295,6 +352,8 @@ for instance in "${INSTANCES[@]}"; do
       TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
       CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
       echo "PERINGATAN: Artefak tidak lengkap/korup untuk $run_id. Menghapus jejak untuk retry..."
+      # FIX pasca-audit: sama seperti skip-check di atas, catat dulu sebelum hapus.
+      printf '%s\n' "$(jq -nc --arg run_id "$run_id" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg reason "incomplete_after_execution" --arg cond "$CONDITION" --arg blok "$BLOCK" --argjson consecutive "$CONSECUTIVE_FAILURES" '{run_id:$run_id, timestamp_utc:$ts, reason:$reason, condition:$cond, block:$blok, consecutive_failures:$consecutive}')" >> "$RESULTS_DIR/retry_log.jsonl"
       rm -f "$RESULTS_DIR/${run_id}".*
       echo "⚠️ Terdeteksi kegagalan run. Jumlah kegagalan beruntun: ${CONSECUTIVE_FAILURES}/3"
       if (( CONSECUTIVE_FAILURES >= 3 )); then
