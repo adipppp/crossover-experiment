@@ -39,11 +39,17 @@ spec:
         - -c
         - "cp /mnt/host-instances/__INSTANCE_FILE__ /app/instances/__INSTANCE_FILE__"
       resources:
+        # FIX pasca-audit: sebelumnya "500m" (bukan integer), berkontradiksi
+        # dengan komentar wajib-integer di kepala berkas ini. Tidak berdampak
+        # nyata pada hasil (initContainer selesai sebelum solver mulai, jadi
+        # tidak pernah berbarengan berebut cpuset dengan container solver),
+        # tapi diperbaiki agar manifest konsisten dengan aturan yang ditulisnya
+        # sendiri dan tidak membingungkan pembaca/auditor berikutnya.
         requests:
-          cpu: "500m"
+          cpu: "1"
           memory: "2Gi"
         limits:
-          cpu: "500m"
+          cpu: "1"
           memory: "2Gi"
       volumeMounts:
         - name: host-instances
