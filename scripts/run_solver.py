@@ -310,6 +310,27 @@ def main():
         result["crossover_seconds"] = callback_summary["crossover_duration_seconds_callback"]
         result["barrier_iteration_seconds"] = callback_summary["barrier_duration_seconds_callback"]
 
+        # TAMBAHAN pasca-audit: celah waktu antara callback BARRIER TERAKHIR dan
+        # callback SIMPLEX PERTAMA. barrier_iteration_seconds hanya mencakup
+        # rentang callback BARRIER pertama->terakhir, dan crossover_seconds
+        # hanya mencakup callback SIMPLEX pertama->akhir solve; keduanya TIDAK
+        # menghitung transisi internal Gurobi di antaranya (mis. konstruksi basis
+        # awal dari solusi barrier), sehingga barrier+crossover < total runtime
+        # dari titik barrier dimulai. Celahnya kecil (order milidetik pada data
+        # yang sudah terkumpul) tapi sebelumnya diam-diam tidak tercatat di
+        # metrik manapun. Field ini murni untuk transparansi/akuntansi waktu,
+        # BUKAN pengganti definisi crossover_seconds/barrier_iteration_seconds
+        # yang sudah dipakai pada analisis sebelumnya.
+        if (
+            callback_summary["crossover_start_runtime"] is not None
+            and callback_summary["barrier_end_runtime"] is not None
+        ):
+            result["barrier_to_crossover_transition_gap_seconds"] = round(
+                callback_summary["crossover_start_runtime"] - callback_summary["barrier_end_runtime"], 6
+            )
+        else:
+            result["barrier_to_crossover_transition_gap_seconds"] = None
+
         # Peringatan jika kedua sumber pengukuran berbeda signifikan (>0.5s),
         # supaya anomali terlihat saat inspeksi hasil, bukan terkubur.
         if (
