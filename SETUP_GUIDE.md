@@ -362,14 +362,39 @@ echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.
   sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
+
+# PENTING (replikasi): install versi PATCH eksplisit, JANGAN "kubelet kubeadm
+# kubectl" polos. Run pertama tidak mencatat versi exact yang dipakai (hanya
+# channel repo v1.36), sehingga replikasi selanjutnya tidak bisa memastikan
+# versi identik. Cek versi tersedia dulu:
+apt-cache madison kubelet | head -5
+# lalu pin exact ke versi yang Anda pilih, mis.:
+KUBE_VERSION="1.36.0-1.1"   # GANTI sesuai output apt-cache madison di atas
+sudo apt-get install -y \
+  kubelet="${KUBE_VERSION}" \
+  kubeadm="${KUBE_VERSION}" \
+  kubectl="${KUBE_VERSION}"
 sudo apt-mark hold kubelet kubeadm kubectl
 
+# Catat versi exact yang benar-benar terpasang — run pertama tidak melakukan
+# ini, sehingga versi K8s aktualnya tidak bisa direkonstruksi dari data hasil.
+mkdir -p ~/experiment-metadata
+{
+  echo "kubelet:    $(kubelet --version)"
+  echo "kubeadm:    $(kubeadm version -o short)"
+  echo "kubectl:    $(kubectl version --client -o yaml | grep gitVersion)"
+  echo "containerd: $(containerd --version)"
+  echo "os-release: $(grep PRETTY_NAME /etc/os-release)"
+  echo "kernel:     $(uname -r)"
+} | tee ~/experiment-metadata/software-versions.txt
 ```
 
-> Catatan: ganti `v1.36` di atas dengan versi minor stabil terbaru jika
-> sudah ada rilis lebih baru saat Anda membaca ini — cek di
-> https://kubernetes.io/releases/
+> Catatan: ganti `v1.36` pada URL repo di atas dengan versi minor stabil
+> terbaru jika sudah ada rilis lebih baru saat Anda membaca ini — cek di
+> https://kubernetes.io/releases/. Yang penting bukan versi mana yang
+> dipilih, tapi bahwa versi PATCH-nya di-pin eksplisit dan dicatat ke
+> `software-versions.txt`, supaya replikasi berikutnya tahu persis apa yang
+> dipakai run ini (celah yang ada di run pertama).
 
 ### 2.6 Install & konfigurasi crictl
 
