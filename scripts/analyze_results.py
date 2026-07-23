@@ -51,6 +51,12 @@ def load_results(results_dir: Path) -> pd.DataFrame:
         cache_miss_rate = None
         ipc = None
         missing_cgroup_snapshot = None
+        # TAMBAHAN pasca-audit: steal time (lihat collect_system_metrics.py) --
+        # dipakai sbg kovariat/pemeriksa tambahan untuk mendeteksi kontensi
+        # level-hypervisor (noisy-neighbor), termasuk untuk investigasi anomali
+        # temporal semacam Subbab 4.3.5. None untuk data lama sebelum fix ini.
+        steal_seconds_crossover = None
+        steal_seconds_whole_process = None
         if sysmetrics_path.exists():
             try:
                 sysmetrics = json.loads(sysmetrics_path.read_text())
@@ -60,6 +66,8 @@ def load_results(results_dir: Path) -> pd.DataFrame:
                 cache_miss_rate = sysmetrics.get("cache_miss_rate")
                 ipc = sysmetrics.get("ipc")
                 missing_cgroup_snapshot = sysmetrics.get("missing_cgroup_snapshot")
+                steal_seconds_crossover = sysmetrics.get("steal_seconds_delta_crossover_phase")
+                steal_seconds_whole_process = sysmetrics.get("steal_seconds_delta_whole_process")
             except json.JSONDecodeError:
                 print(f"PERINGATAN: gagal parse {sysmetrics_path}, metrik sistem run ini diabaikan.")
 
@@ -97,6 +105,10 @@ def load_results(results_dir: Path) -> pd.DataFrame:
             "discrepancy_warning": data.get("phase_timing_discrepancy_warning"),
             "missing_cgroup_snapshot": missing_cgroup_snapshot,
             "error": data.get("error"),
+            # TAMBAHAN pasca-audit (lihat CHANGELOG.md):
+            "steal_seconds_delta_crossover_phase": steal_seconds_crossover,
+            "steal_seconds_delta_whole_process": steal_seconds_whole_process,
+            "barrier_to_crossover_transition_gap_seconds": data.get("barrier_to_crossover_transition_gap_seconds"),
         })
 
     return pd.DataFrame(rows)
@@ -755,6 +767,88 @@ def run_mannwhitney_context_switches(df: pd.DataFrame):
     print()
 
 
+def check_completeness(df: pd.DataFrame, expected_n: int = 30,
+                        expected_blocks: tuple = (1, 2),
+                        # PENTING: casing di sini HARUS cocok dengan nilai yang
+                        # dihasilkan load_results() -- yaitu Path(data["instance"]).stem
+                        # dari field "instance" pada JSON (path .mps ASLI, mis.
+                        # "/app/instances/L1_sixm1000obs.mps"), BUKAN dari run_id
+                        # yang huruf kecil/hyphen (mis. "l1-sixm1000obs" pada nama
+                        # file hasil/Pod -- konvensi berbeda karena nama resource
+                        # K8s harus lowercase DNS-compatible sedangkan file .mps asli
+                        # dari koleksi Mittelmann memakai mixed-case). Diverifikasi
+                        # langsung dari data: unique() instance sesungguhnya adalah
+                        # ['L1_sixm1000obs', 'Linf_520c', 'cont1', 'cont11', 'neos3'].
+                        expected_instances: tuple = (
+                            "cont1", "cont11", "L1_sixm1000obs", "Linf_520c", "neos3",
+                        )) -> bool:
+    """
+    Periksa apakah setiap kombinasi instance x kondisi sudah mencapai n
+    yang direncanakan (default 30 = 15 rep x 2 blok). Kalau BELUM, cetak
+    banner peringatan yang jelas agar output ini tidak keliru terbaca
+    sebagai hasil final saat baru sebagian blok yang selesai (mis. dicek
+    di sela-sela jeda antar blok).
+
+    FIX: versi sebelumnya memakai `df.groupby(["instance","condition"]).size()`
+    untuk mencari kombinasi dengan n < expected_n. Bug-nya: groupby HANYA
+    mendaftar kombinasi yang BENAR-BENAR MUNCUL di df -- instance yang HILANG
+    TOTAL (0 baris, mis. baru 2 dari 5 instance selesai dikumpulkan) tidak
+    pernah tampil sebagai baris groupby sama sekali, sehingga tidak pernah
+    tertangkap sebagai "n < expected_n" dan lolos sebagai "lengkap". Diverifikasi
+    langsung: subset berisi HANYA cont11+neos3 (keduanya n=30 penuh) dilaporkan
+    "lengkap" oleh versi lama walau 3 dari 5 instance sama sekali tidak ada.
+    Fix: bangun cartesian product instance x kondisi yang DIHARAPKAN secara
+    eksplisit, lalu reindex count aktual terhadapnya (isi 0 untuk yang tidak
+    ada), baru cek < expected_n -- sehingga kombinasi dengan 0 baris ikut tertangkap.
+
+    Mengembalikan True kalau data lengkap (n=expected_n di semua sel yang
+    DIHARAPKAN, termasuk yang belum py=0, DAN kedua blok yang diharapkan hadir),
+    False kalau parsial.
+    """
+    expected_conditions = ("none", "static")
+    expected_index = pd.MultiIndex.from_product(
+        [expected_instances, expected_conditions], names=["instance", "condition"]
+    )
+    counts = df.groupby(["instance", "condition"]).size().reindex(expected_index, fill_value=0)
+    incomplete = counts[counts < expected_n]
+
+    # Instance yang muncul di data tapi TIDAK ada di expected_instances (mis.
+    # typo penamaan, atau instance baru yang belum didaftarkan di sini) --
+    # ditandai terpisah supaya tidak diam-diam terlewat dari cek manapun.
+    unexpected_instances = sorted(set(df["instance"].unique()) - set(expected_instances))
+
+    blocks_present = sorted(df["block"].unique().tolist())
+    missing_blocks = [b for b in expected_blocks if b not in blocks_present]
+
+    is_complete = incomplete.empty and not missing_blocks and not unexpected_instances
+
+    if is_complete:
+        return True
+
+    print("#" * 70)
+    print("# ⚠️  PERINGATAN: DATA BELUM LENGKAP — HASIL DI BAWAH INI INTERIM")
+    print("#" * 70)
+    if missing_blocks:
+        print(f"#  Blok belum tersedia: {missing_blocks} (tersedia: {blocks_present})")
+    if unexpected_instances:
+        print(f"#  Instance TAK DIKENALI (di luar {list(expected_instances)}): "
+              f"{unexpected_instances} -- cek kemungkinan typo run_id.")
+    if not incomplete.empty:
+        print("#  Kombinasi instance x kondisi dengan n < "
+              f"{expected_n} (target penuh, termasuk yang n=0 / belum mulai sama sekali):")
+        for (instance, condition), n in incomplete.items():
+            label_cond = "A (none)" if condition == "none" else "B (static)"
+            print(f"#    {instance:<20} Kondisi {label_cond:<10} n={n} (dari {expected_n})")
+    print("#")
+    print("#  Seluruh p-value, MDE, effect size, dan tabel di bawah ini DIHITUNG")
+    print("#  DARI DATA YANG TERSEDIA SAAT INI SAJA. Jangan jadikan hasil final")
+    print("#  sampai seluruh blok/repetisi yang direncanakan selesai dan skrip")
+    print("#  ini dijalankan ulang.")
+    print("#" * 70)
+    print()
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", required=True)
@@ -788,6 +882,11 @@ def main():
             print(f"  (Catatan: {len(timeout_runs)} diantaranya adalah run TIME_LIMIT (timeout) — data fase parsial diabaikan)")
         print()
     df = df[df["status_code"] == 2]
+
+    # Banner data-parsial: HARUS di sini, sebelum analisis apa pun, supaya
+    # jadi hal pertama yang terlihat kalau skrip ini dijalankan di sela-sela
+    # jeda antar blok (mis. sanity check Blok 1 sebelum Blok 2 selesai).
+    check_completeness(df)
 
     # Identifikasi run Kondisi A yang mengalami CFS throttling secara bermakna
     # (proporsional terhadap crossover_seconds — lihat identify_throttled_runs).
