@@ -1,9 +1,9 @@
 # Dockerfile — image solver untuk eksperimen CPU pinning x Gurobi crossover
 # Base image resmi Gurobi (sudah berisi Gurobi Optimizer + Python API)
-FROM gurobi/python:11.0.3@sha256:d631ee5d6c3a26d084fedf11bf44bd3568e5af743a259c9c65ece6f9ea1343f9
+FROM gurobi/python:13.0.2_3.12@sha256:a5565d83180d08e378397671b7e4aa15cb2866ad23c212b4bde97703efffcca9
 
 # Validasi versi Gurobi pada saat build
-RUN python -c "import gurobipy; assert gurobipy.gurobi.version() == (11, 0, 3), f'Expected Gurobi version (11, 0, 3) but got {gurobipy.gurobi.version()}'"
+RUN python -c "import gurobipy; assert gurobipy.gurobi.version()[:2] == (13, 0), f'Expected Gurobi version 13.0.x but got {gurobipy.gurobi.version()}'"
 
 WORKDIR /app
 
