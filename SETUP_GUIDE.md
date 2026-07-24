@@ -369,12 +369,18 @@ sudo apt-get update
 # versi identik. Cek versi tersedia dulu:
 apt-cache madison kubelet | head -5
 # lalu pin exact ke versi yang Anda pilih, mis.:
-KUBE_VERSION="1.36.0-1.1"   # GANTI sesuai output apt-cache madison di atas
+KUBE_VERSION="1.36.3-1.1"
 sudo apt-get install -y \
   kubelet="${KUBE_VERSION}" \
   kubeadm="${KUBE_VERSION}" \
   kubectl="${KUBE_VERSION}"
 sudo apt-mark hold kubelet kubeadm kubectl
+
+INSTALLED_VERSION=$(kubelet --version | grep -oP 'v\d+\.\d+\.\d+')
+if [[ "$INSTALLED_VERSION" != "v1.36.3" ]]; then
+  echo "FATAL: kubelet installed version is $INSTALLED_VERSION, not v1.36.3 as claimed in manuscript §3.2.1." >&2
+  exit 1
+fi
 
 # Catat versi exact yang benar-benar terpasang — run pertama tidak melakukan
 # ini, sehingga versi K8s aktualnya tidak bisa direkonstruksi dari data hasil.
