@@ -284,6 +284,18 @@ for instance in "${INSTANCES[@]}"; do
       echo "PERINGATAN: solver_cpus tidak terbaca dari $TOPOLOGY_REPORT -- sanity-check overlap dilewati (reserved_cpu=$RESERVED_CPU tetap dipakai)." >&2
     fi
 
+    if [[ "$CONDITION" == "static" ]]; then
+      APPLIED_RESERVED_CPUS=$(sudo grep "reservedSystemCPUs:" /var/lib/kubelet/config.yaml 2>/dev/null | awk -F': ' '{print $2}' | tr -d '"')
+      if [[ -z "$APPLIED_RESERVED_CPUS" ]]; then
+        echo "FATAL: reservedSystemCPUs not found in the applied /var/lib/kubelet/config.yaml." >&2
+        exit 1
+      fi
+      if [[ "$APPLIED_RESERVED_CPUS" != "$RESERVED_CPU" ]]; then
+        echo "FATAL: Applied reservedSystemCPUs ($APPLIED_RESERVED_CPUS) DOES NOT MATCH topology-report.json ($RESERVED_CPU)." >&2
+        exit 1
+      fi
+    fi
+
     metrics_output="$RESULTS_DIR/${run_id}.sysmetrics.json"
     taskset -c "$RESERVED_CPU" python3 "$SCRIPT_DIR/collect_system_metrics.py" \
       --pod-name "$pod_name" \
@@ -334,7 +346,10 @@ for instance in "${INSTANCES[@]}"; do
     # Bersihkan L3 Cache dan Page Cache di Host di antara run pengujian
     echo ">>> Mengosongkan host page cache & syncing..."
     sync
-    echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+    if ! echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1; then
+      echo "WARNING: drop_caches write failed for $run_id — recording for audit" >&2
+      printf '%s\n' "$(jq -nc --arg run_id "$run_id" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{run_id:$run_id, timestamp_utc:$ts, reason:"drop_caches_failed"}')" >> "$RESULTS_DIR/retry_log.jsonl"
+    fi
     sleep 2
 
     RUN_SUCCESS=false
