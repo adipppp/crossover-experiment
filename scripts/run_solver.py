@@ -234,16 +234,23 @@ def main():
         env.setParam("Method", 2)       # WAJIB: paksa barrier murni
         env.setParam("Crossover", 4)    # Explicit: paksa push step primal+dual
         
+        EXPECTED_THREADS = 4
+
         if not args.check:
             env.setParam("TimeLimit", 1700.0) # Batas waktu pengerjaan solver
-            if args.threads <= 0:
-                raise ValueError(f"--threads must be a positive integer (got {args.threads}). "
-                                 "Gurobi thread auto-detection is a proposal confounder.")
+            if args.threads != EXPECTED_THREADS:
+                raise ValueError(
+                    f"--threads must equal {EXPECTED_THREADS} per manuscript Section 3.3 "
+                    f"(got {args.threads}). This is a fixed experimental constant, not a free parameter."
+                )
             env.setParam("Threads", args.threads)
         else:
             # Di check mode, jika threads diberikan, validasikan nilainya
-            if args.threads is not None and args.threads <= 0:
-                raise ValueError(f"--threads must be a positive integer (got {args.threads}).")
+            if args.threads is not None and args.threads != EXPECTED_THREADS:
+                raise ValueError(
+                    f"--threads must equal {EXPECTED_THREADS} per manuscript Section 3.3 "
+                    f"(got {args.threads}). This is a fixed experimental constant, not a free parameter."
+                )
             if args.threads is not None:
                 env.setParam("Threads", args.threads)
 
